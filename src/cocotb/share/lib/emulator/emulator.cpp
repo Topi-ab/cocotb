@@ -29,6 +29,8 @@
 #include <utility>
 #include <vector>
 
+#include <dlfcn.h>
+
 #include "gpi.h"
 #include "gpi_priv.hpp"
 
@@ -648,9 +650,74 @@ private:
     std::unordered_map<std::string, std::unique_ptr<GpiObjHdl>> handle_cache_;
 };
 
+struct AdapterApi {
+    void *handle = nullptr;
+    const char *(*name)() = nullptr;
+    int (*init)() = nullptr;
+    int (*shutdown)() = nullptr;
+};
+
+static AdapterApi load_adapter() {
+    const char *path = std::getenv("EMULATOR_ADAPTER_SO");
+    if (!path || !*path) {
+        path = "libemu_adapter.so";
+    }
+
+    AdapterApi api{};
+    api.handle = dlopen(path, RTLD_NOW);
+    if (!api.handle) {
+        std::cerr << "ERROR: unable to load adapter " << path << ": " << dlerror()
+                  << "\n";
+        return api;
+    }
+    dlerror();  // clear
+    api.name = reinterpret_cast<const char *(*)()>(dlsym(api.handle, "emulator_adapter_name"));
+    api.init = reinterpret_cast<int (*)()>(dlsym(api.handle, "emulator_adapter_init"));
+    api.shutdown = reinterpret_cast<int (*)()>(dlsym(api.handle, "emulator_adapter_shutdown"));
+    if (!api.name || !api.init || !api.shutdown) {
+        std::cerr << "ERROR: adapter missing required symbols\n";
+        dlclose(api.handle);
+        api.handle = nullptr;
+    }
+    return api;
+}
+
+static void unload_adapter(AdapterApi &api) {
+    if (api.shutdown) api.shutdown();
+    if (api.handle) dlclose(api.handle);
+    api = AdapterApi{};
+}
+
+static bool ensure_env_set(const char *name) {
+    const char *val = std::getenv(name);
+    if (!val || *val == '\0') {
+        std::cerr << "ERROR: environment variable " << name << " is required\n";
+        return false;
+    }
+    return true;
+}
+
 // ----------------------- main -----------------------
 int main(int argc, char **argv) {
     try {
+        const char *required_env[] = {"PYGPI_PYTHON_BIN", "COCOTB_TEST_MODULES"};
+        for (const char *name : required_env) {
+            if (!ensure_env_set(name)) {
+                return 2;
+            }
+        }
+
+        AdapterApi adapter = load_adapter();
+        if (!adapter.handle) {
+            return 2;
+        }
+        if (adapter.init && adapter.init() != 0) {
+            std::cerr << "ERROR: adapter init failed\n";
+            unload_adapter(adapter);
+            return 2;
+        }
+        std::cout << "[emulator] using adapter: " << (adapter.name ? adapter.name() : "unknown") << "\n";
+
         EmuContext ctx;
         EmuImpl impl(ctx);
 
@@ -704,6 +771,7 @@ int main(int argc, char **argv) {
 
         // End embedded python
         gpi_end_of_sim_time();
+        unload_adapter(adapter);
         return ctx.exit_code();
     } catch (const std::exception &e) {
         std::cerr << "FATAL: " << e.what() << "\n";
