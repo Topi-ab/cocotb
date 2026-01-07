@@ -87,6 +87,7 @@ setup(
             package_files("src/cocotb/share/include")
             + package_files("src/cocotb/share/def")
             + package_files("src/cocotb/share/lib/verilator")
+            + package_files("src/cocotb/share/lib/emulator")
         ),
         "cocotb_tools": (package_files("src/cocotb_tools/makefiles")),
     },

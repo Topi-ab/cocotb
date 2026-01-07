@@ -207,6 +207,14 @@ def _get_lib_ext_name():
     return ext_name
 
 
+class Executable(Extension):
+    """Extension-like object to build standalone executables."""
+
+    def __init__(self, *args, cpp_standard=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cpp_standard = cpp_standard
+
+
 class build_ext(_build_ext):
     def _uses_msvc(self):
         if self.compiler == "msvc":
@@ -244,6 +252,8 @@ class build_ext(_build_ext):
 
             ext_names = {os.path.split(ext.name)[-1] for ext in self.extensions}
             for ext in self.extensions:
+                if isinstance(ext, Executable):
+                    continue
                 fullname = self.get_ext_fullname(ext.name)
                 filename = self.get_ext_filename(fullname)
                 name = os.path.split(fullname)[-1]
@@ -278,6 +288,9 @@ class build_ext(_build_ext):
         super().build_extensions()
 
     def build_extension(self, ext):
+        if isinstance(ext, Executable):
+            self._build_executable(ext)
+            return
         """Build each extension in its own temp directory to make gcov happy.
 
         A normal PEP 517 install still works as the temp directories are discarded anyway.
@@ -344,6 +357,14 @@ class build_ext(_build_ext):
          - replaces ``.pyd`` with ``.dll`` on windows.
         """
 
+        if ext_name in getattr(self, "_executable_names", set()):
+            filename = _build_ext.get_ext_filename(self, ext_name)
+            head, tail = os.path.split(filename)
+            base = tail.split(".")[0].split("-")[0]
+            if os.name == "nt":
+                base = base + ".exe"
+            return os.path.join(head, base)
+
         filename = _build_ext.get_ext_filename(self, ext_name)
 
         # for the simulator python extension library, leaving suffix in place
@@ -378,6 +399,11 @@ class build_ext(_build_ext):
     def finalize_options(self):
         """Like the base class method,but add extra library_dirs path."""
 
+        extensions = self.extensions or []
+        self._executable_names = {
+            ext.name for ext in extensions if isinstance(ext, Executable)
+        }
+
         super().finalize_options()
 
         for ext in self.extensions:
@@ -394,8 +420,14 @@ class build_ext(_build_ext):
             package = ".".join(modpath[:-1])
             package_dir = build_py.get_package_dir(package)
             # unlike the method from `setuptools`, we do not call `os.path.basename` here
-            dest_filename = os.path.join(package_dir, filename)
-            src_filename = os.path.join(self.build_lib, filename)
+            if isinstance(ext, Executable):
+                dest_filename = os.path.join(
+                    build_py.get_package_dir("cocotb"), "libs", os.path.split(ext.name)[-1]
+                )
+                src_filename = os.path.join(self.build_lib, "cocotb", "libs", os.path.split(ext.name)[-1])
+            else:
+                dest_filename = os.path.join(package_dir, filename)
+                src_filename = os.path.join(self.build_lib, filename)
 
             os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
 
@@ -433,6 +465,81 @@ class build_ext(_build_ext):
                     ],
                     check=True,
                 )
+
+    def _build_executable(self, ext: Executable):
+        compile_args = list(ext.extra_compile_args)
+        link_args = list(ext.extra_link_args)
+
+        uses_msvc = self._uses_msvc()
+        if uses_msvc:
+            compile_args += _extra_cxx_compile_args_msvc
+            if ext.cpp_standard:
+                compile_args.append(f"/std:{ext.cpp_standard}")
+        else:
+            common_cxx = list(_extra_cxx_compile_args)
+            if ext.cpp_standard:
+                common_cxx = [
+                    arg for arg in common_cxx if not arg.startswith("-std=")
+                ]
+                compile_args.append(f"-std={ext.cpp_standard}")
+            compile_args += common_cxx
+
+            if os.name == "nt":
+                link_args += ["-Wl,--exclude-all-symbols"]
+            else:
+                link_args += ["-flto"]
+                rpaths = ["$ORIGIN"]
+                if sys.platform == "darwin":
+                    rpaths = [
+                        rpath.replace("$ORIGIN", "@loader_path") for rpath in rpaths
+                    ]
+                if sys.platform == "linux":
+                    link_args += ["-static-libstdc++", "-lstdc++"]
+                link_args += [f"-Wl,-rpath,{rpath}" for rpath in rpaths]
+
+        if os.name == "nt":
+            ext.define_macros += [("WIN32", "")]
+
+        sources = list(ext.sources)
+        output_filename = self.get_ext_fullpath(ext.name)
+
+        old_build_temp = self.build_temp
+        self.build_temp = os.path.join(self.build_temp, ext.name)
+        os.makedirs(self.build_temp, exist_ok=True)
+
+        objects = self.compiler.compile(
+            sources,
+            output_dir=self.build_temp,
+            macros=ext.define_macros,
+            include_dirs=ext.include_dirs,
+            debug=self.debug,
+            extra_postargs=compile_args,
+            depends=ext.depends,
+        )
+        objects += list(ext.extra_objects or [])
+
+        output_filename = os.path.join(self.build_lib, ext.name)
+        os.makedirs(os.path.dirname(output_filename), exist_ok=True)
+
+        old_linker_exe = getattr(self.compiler, "linker_exe", None)
+        try:
+            if hasattr(self.compiler, "compiler_cxx"):
+                self.compiler.linker_exe = list(self.compiler.compiler_cxx)
+
+            self.compiler.link_executable(
+                objects,
+                output_filename,
+                libraries=ext.libraries,
+                library_dirs=ext.library_dirs,
+                runtime_library_dirs=ext.runtime_library_dirs,
+                extra_postargs=link_args,
+                debug=self.debug,
+            )
+        finally:
+            if old_linker_exe is not None:
+                self.compiler.linker_exe = old_linker_exe
+
+        self.build_temp = old_build_temp
 
 
 def _get_python_lib_link():
@@ -580,6 +687,24 @@ def _get_vhpi_lib_ext(
     )
 
     return libcocotbvhpi
+
+
+def _get_emulator_executable(include_dirs, share_lib_dir):
+    emulator_sources = [
+        os.path.join(share_lib_dir, "emulator", "emulator.cpp"),
+    ]
+    emulator_include_dirs = [
+        *include_dirs,
+        os.path.join(share_lib_dir, "gpi"),
+    ]
+    return Executable(
+        os.path.join("cocotb", "libs", "emulator"),
+        include_dirs=emulator_include_dirs,
+        define_macros=[*_extra_defines],
+        libraries=["gpi"],
+        sources=emulator_sources,
+        cpp_standard="c++20",
+    )
 
 
 def get_ext():
@@ -760,5 +885,14 @@ def get_ext():
             include_dirs=include_dirs, share_lib_dir=share_lib_dir, sim_define="DSim"
         )
         ext.append(dsim_vpi_ext)
+
+    #
+    # Emulator (GPI-only)
+    #
+    if os.name == "posix":
+        logger.info("Compiling emulator backend")
+        ext.append(
+            _get_emulator_executable(include_dirs=include_dirs, share_lib_dir=share_lib_dir)
+        )
 
     return ext
