@@ -652,9 +652,12 @@ private:
 
 struct AdapterApi {
     void *handle = nullptr;
-    const char *(*name)() = nullptr;
-    int (*init)() = nullptr;
-    int (*shutdown)() = nullptr;
+    void *obj = nullptr;
+    void *(*create)() = nullptr;
+    void (*destroy)(void *) = nullptr;
+    const char *(*name_obj)(void *) = nullptr;
+    int (*init_obj)(void *) = nullptr;
+    int (*shutdown_obj)(void *) = nullptr;
 };
 
 static AdapterApi load_adapter() {
@@ -671,10 +674,12 @@ static AdapterApi load_adapter() {
         return api;
     }
     dlerror();  // clear
-    api.name = reinterpret_cast<const char *(*)()>(dlsym(api.handle, "emulator_adapter_name"));
-    api.init = reinterpret_cast<int (*)()>(dlsym(api.handle, "emulator_adapter_init"));
-    api.shutdown = reinterpret_cast<int (*)()>(dlsym(api.handle, "emulator_adapter_shutdown"));
-    if (!api.name || !api.init || !api.shutdown) {
+    api.create = reinterpret_cast<void *(*)()>(dlsym(api.handle, "emulator_adapter_create"));
+    api.destroy = reinterpret_cast<void (*)(void *)>(dlsym(api.handle, "emulator_adapter_destroy"));
+    api.name_obj = reinterpret_cast<const char *(*)(void *)>(dlsym(api.handle, "emulator_adapter_name_obj"));
+    api.init_obj = reinterpret_cast<int (*)(void *)>(dlsym(api.handle, "emulator_adapter_init_obj"));
+    api.shutdown_obj = reinterpret_cast<int (*)(void *)>(dlsym(api.handle, "emulator_adapter_shutdown_obj"));
+    if (!api.create || !api.destroy || !api.name_obj || !api.init_obj || !api.shutdown_obj) {
         std::cerr << "ERROR: adapter missing required symbols\n";
         dlclose(api.handle);
         api.handle = nullptr;
@@ -683,7 +688,8 @@ static AdapterApi load_adapter() {
 }
 
 static void unload_adapter(AdapterApi &api) {
-    if (api.shutdown) api.shutdown();
+    if (api.shutdown_obj && api.obj) api.shutdown_obj(api.obj);
+    if (api.destroy && api.obj) api.destroy(api.obj);
     if (api.handle) dlclose(api.handle);
     api = AdapterApi{};
 }
@@ -711,12 +717,19 @@ int main(int argc, char **argv) {
         if (!adapter.handle) {
             return 2;
         }
-        if (adapter.init && adapter.init() != 0) {
+        adapter.obj = adapter.create ? adapter.create() : nullptr;
+        if (!adapter.obj) {
+            std::cerr << "ERROR: adapter create failed\n";
+            unload_adapter(adapter);
+            return 2;
+        }
+        if (adapter.init_obj && adapter.init_obj(adapter.obj) != 0) {
             std::cerr << "ERROR: adapter init failed\n";
             unload_adapter(adapter);
             return 2;
         }
-        std::cout << "[emulator] using adapter: " << (adapter.name ? adapter.name() : "unknown") << "\n";
+        std::cout << "[emulator] using adapter: "
+                  << (adapter.name_obj ? adapter.name_obj(adapter.obj) : "unknown") << "\n";
 
         EmuContext ctx;
         EmuImpl impl(ctx);
