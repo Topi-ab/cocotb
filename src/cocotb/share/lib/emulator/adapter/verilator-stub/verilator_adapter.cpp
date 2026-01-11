@@ -6,16 +6,15 @@
 
 #include "emulator.hpp"
 #include "verilated.h"
-#include "Vemulator_wrapper.h"
+#include "Vtest.h"
 
 namespace {
 
 enum class SignalKind {
-    ClkIn,
-    A0In,
-    A1In,
-    B0Out,
-    B1Out,
+    Clk,
+    RstN,
+    CountA,
+    CountB,
 };
 
 struct SignalHandle {
@@ -28,8 +27,8 @@ public:
 
     int init() {
         std::puts("[verilator_adapter] init");
-        dut_.scan_enable_in = 0;
-        dut_.scan_in = 0;
+        dut_.clk = 0;
+        dut_.rst_n = 0;
         build_catalog();
         return 0;
     }
@@ -47,40 +46,26 @@ public:
 
         const int32_t v01 = (value != 0) ? 1 : 0;
         switch (h->kind) {
-            case SignalKind::ClkIn: {
-                auto clk = static_cast<uint8_t>(dut_.clk_in);
-                clk = static_cast<uint8_t>((clk & ~0x1u) | static_cast<uint8_t>(v01));
-                dut_.clk_in = clk;
+            case SignalKind::Clk:
+                dut_.clk = static_cast<uint8_t>(v01);
                 break;
-            }
-            case SignalKind::A0In: {
-                auto in = static_cast<uint8_t>(dut_.dut_in);
-                in = static_cast<uint8_t>((in & ~0x1u) | static_cast<uint8_t>(v01));
-                dut_.dut_in = in;
+            case SignalKind::RstN:
+                dut_.rst_n = static_cast<uint8_t>(v01);
                 break;
-            }
-            case SignalKind::A1In: {
-                auto in = static_cast<uint8_t>(dut_.dut_in);
-                in = static_cast<uint8_t>((in & ~0x2u) | static_cast<uint8_t>(v01 << 1));
-                dut_.dut_in = in;
-                break;
-            }
-            case SignalKind::B0Out:
-            case SignalKind::B1Out:
+            case SignalKind::CountA:
+            case SignalKind::CountB:
                 return -1;
         }
-        dut_.scan_enable_in = 0;
-        dut_.scan_in = 0;
         dut_.eval();
         if (debug_) {
-            const char *name = (h->kind == SignalKind::ClkIn) ? "clk_in"
-                               : (h->kind == SignalKind::A0In) ? "a_0_in"
-                               : "a_1_in";
-            std::printf("[verilator_adapter] set %s=%d -> clk_in=%u dut_in=%u dut_out=%u\n",
+            const char *name = (h->kind == SignalKind::Clk) ? "clk"
+                               : "rst_n";
+            std::printf("[verilator_adapter] set %s=%d -> clk=%u rst_n=%u count_a=%u count_b=%u\n",
                         name, v01,
-                        static_cast<unsigned>(dut_.clk_in),
-                        static_cast<unsigned>(dut_.dut_in),
-                        static_cast<unsigned>(dut_.dut_out));
+                        static_cast<unsigned>(dut_.clk),
+                        static_cast<unsigned>(dut_.rst_n),
+                        static_cast<unsigned>(dut_.count_a),
+                        static_cast<unsigned>(dut_.count_b));
         }
         return 0;
     }
@@ -91,34 +76,31 @@ public:
 
         int32_t value = 0;
         switch (h->kind) {
-            case SignalKind::ClkIn:
-                value = (static_cast<uint8_t>(dut_.clk_in) & 0x1u) ? 1 : 0;
+            case SignalKind::Clk:
+                value = (static_cast<uint8_t>(dut_.clk) & 0x1u) ? 1 : 0;
                 break;
-            case SignalKind::A0In:
-                value = (static_cast<uint8_t>(dut_.dut_in) & 0x1u) ? 1 : 0;
+            case SignalKind::RstN:
+                value = (static_cast<uint8_t>(dut_.rst_n) & 0x1u) ? 1 : 0;
                 break;
-            case SignalKind::A1In:
-                value = (static_cast<uint8_t>(dut_.dut_in) & 0x2u) ? 1 : 0;
+            case SignalKind::CountA:
+                value = static_cast<int32_t>(static_cast<uint8_t>(dut_.count_a) & 0xFu);
                 break;
-            case SignalKind::B0Out:
-                value = (static_cast<uint8_t>(dut_.dut_out) & 0x1u) ? 1 : 0;
-                break;
-            case SignalKind::B1Out:
-                value = (static_cast<uint8_t>(dut_.dut_out) & 0x2u) ? 1 : 0;
+            case SignalKind::CountB:
+                value = static_cast<int32_t>(static_cast<uint8_t>(dut_.count_b) & 0x1Fu);
                 break;
         }
         if (out) *out = value;
         if (debug_) {
-            const char *name = (h->kind == SignalKind::ClkIn) ? "clk_in"
-                               : (h->kind == SignalKind::A0In) ? "a_0_in"
-                               : (h->kind == SignalKind::A1In) ? "a_1_in"
-                               : (h->kind == SignalKind::B0Out) ? "b_0_out"
-                               : "b_1_out";
-            std::printf("[verilator_adapter] get %s -> %d (clk_in=%u dut_in=%u dut_out=%u)\n",
+            const char *name = (h->kind == SignalKind::Clk) ? "clk"
+                               : (h->kind == SignalKind::RstN) ? "rst_n"
+                               : (h->kind == SignalKind::CountA) ? "count_a"
+                               : "count_b";
+            std::printf("[verilator_adapter] get %s -> %d (clk=%u rst_n=%u count_a=%u count_b=%u)\n",
                         name, value,
-                        static_cast<unsigned>(dut_.clk_in),
-                        static_cast<unsigned>(dut_.dut_in),
-                        static_cast<unsigned>(dut_.dut_out));
+                        static_cast<unsigned>(dut_.clk),
+                        static_cast<unsigned>(dut_.rst_n),
+                        static_cast<unsigned>(dut_.count_a),
+                        static_cast<unsigned>(dut_.count_b));
         }
         return 0;
     }
@@ -127,8 +109,8 @@ private:
     void build_catalog() {
         signals_.clear();
         handles_.clear();
-        signals_.reserve(6);
-        handles_.reserve(5);
+        signals_.reserve(5);
+        handles_.reserve(4);
 
         signals_.push_back(EmuAdapterSignal{
             "dut",
@@ -138,47 +120,38 @@ private:
             -1,
             true,
         });
-        handles_.push_back(SignalHandle{SignalKind::ClkIn});
+        handles_.push_back(SignalHandle{SignalKind::Clk});
         signals_.push_back(EmuAdapterSignal{
-            "clk_in",
-            "dut.clk_in",
+            "clk",
+            "dut.clk",
             1,
             &handles_.back(),
             0,
             false,
         });
-        handles_.push_back(SignalHandle{SignalKind::A0In});
+        handles_.push_back(SignalHandle{SignalKind::RstN});
         signals_.push_back(EmuAdapterSignal{
-            "a_0_in",
-            "dut.a_0_in",
+            "rst_n",
+            "dut.rst_n",
             1,
             &handles_.back(),
             0,
             false,
         });
-        handles_.push_back(SignalHandle{SignalKind::A1In});
+        handles_.push_back(SignalHandle{SignalKind::CountA});
         signals_.push_back(EmuAdapterSignal{
-            "a_1_in",
-            "dut.a_1_in",
-            1,
+            "count_a",
+            "dut.count_a",
+            4,
             &handles_.back(),
             0,
             false,
         });
-        handles_.push_back(SignalHandle{SignalKind::B0Out});
+        handles_.push_back(SignalHandle{SignalKind::CountB});
         signals_.push_back(EmuAdapterSignal{
-            "b_0_out",
-            "dut.b_0_out",
-            1,
-            &handles_.back(),
-            0,
-            false,
-        });
-        handles_.push_back(SignalHandle{SignalKind::B1Out});
-        signals_.push_back(EmuAdapterSignal{
-            "b_1_out",
-            "dut.b_1_out",
-            1,
+            "count_b",
+            "dut.count_b",
+            5,
             &handles_.back(),
             0,
             false,
@@ -189,7 +162,7 @@ private:
     }
 
     std::string name_ = "verilator_adapter_stub";
-    Vemulator_wrapper dut_;
+    Vtest dut_;
     bool debug_ = (std::getenv("EMU_VERILATOR_DEBUG") != nullptr);
     std::vector<EmuAdapterSignal> signals_;
     std::vector<SignalHandle> handles_;
