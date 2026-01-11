@@ -14,4 +14,10 @@ async def smoke_signal_propagation(dut):
     await fall_task
     assert int(dut.cpp_to_py.value) == 0
 
-    await Timer(10, "us")
+    for i in range(10):
+        dut.py_to_cpp.value = 0
+        await Timer(0.5, "ns")
+        dut.py_to_cpp.value = 1
+        await Timer(0.5, "ns")
+
+#    await Timer(10, "us")

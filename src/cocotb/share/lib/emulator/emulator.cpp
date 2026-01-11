@@ -31,6 +31,7 @@
 
 #include <dlfcn.h>
 
+#include "emulator.hpp"
 #include "gpi.h"
 #include "gpi_priv.hpp"
 
@@ -131,16 +132,22 @@ private:
 class EmuValueChangeCb;  // fwd
 enum class ValueEdge;
 
+// ----------------------- Adapter API -----------------------
+
 class EmuSignal : public GpiSignalObjHdl {
 public:
     EmuSignal(GpiImplInterface *impl,
               EmuContext *ctx,
+              AdapterApi *adapter,
               const std::string &name,
               const std::string &fullname,
-              SignalState *st)
-        : GpiSignalObjHdl(impl, nullptr, (st && st->width == 1) ? GPI_LOGIC : GPI_LOGIC_ARRAY, false),
+              SignalState *st,
+              void *adapter_hdl)
+        : GpiSignalObjHdl(impl, adapter_hdl, (st && st->width == 1) ? GPI_LOGIC : GPI_LOGIC_ARRAY, false),
           ctx_(ctx),
-          state_(st) {
+          adapter_(adapter),
+          state_(st),
+          adapter_hdl_(adapter_hdl) {
         m_name = name;
         m_fullname = fullname;
         m_length = state_ ? state_->width : 1;
@@ -149,11 +156,13 @@ public:
 
     // Readbacks
     const char *get_signal_value_binstr() override {
+        refresh_from_adapter();
         tmp_ = state_ ? state_->last_bin : std::string("0");
         return tmp_.c_str();
     }
 
     const char *get_signal_value_str() override {
+        refresh_from_adapter();
         tmp_ = state_ ? state_->last_bin : std::string("0");
         return tmp_.c_str();
     }
@@ -161,6 +170,7 @@ public:
     double get_signal_value_real() override { return 0.0; }
 
     long get_signal_value_long() override {
+        refresh_from_adapter();
         // cocotb API still exposes long reads; we return the stored int32.
         return state_ ? static_cast<long>(state_->last_i32) : 0L;
     }
@@ -172,6 +182,11 @@ public:
         int32_t old = state_->last_i32;
         state_->last_i32 = value;
         // v1: simplistic bin conversion for 0/1 only (expand later)
+        if (adapter_ && adapter_->set_i32) {
+            if (adapter_->set_i32(adapter_->obj, adapter_hdl_, value) != 0) {
+                return -1;
+            }
+        }
         state_->last_bin = (value == 0) ? "0" : "1";
         notify_value_change(old, state_->last_i32);
         return 0;
@@ -189,6 +204,11 @@ public:
         state_->last_bin = value;
         if (value == "0") state_->last_i32 = 0;
         else if (value == "1") state_->last_i32 = 1;
+        if (adapter_ && adapter_->set_i32) {
+            if (adapter_->set_i32(adapter_->obj, adapter_hdl_, state_->last_i32) != 0) {
+                return -1;
+            }
+        }
         notify_value_change(old, state_->last_i32);
         return 0;
     }
@@ -205,9 +225,29 @@ public:
 
 private:
     EmuContext *ctx_;
+    AdapterApi *adapter_;
     SignalState *state_;
+    void *adapter_hdl_;
     std::string tmp_;
     std::vector<EmuValueChangeCb *> value_cbs_;
+
+    void refresh_from_adapter() {
+        if (!state_ || !adapter_ || !adapter_->get_i32) return;
+        int32_t val = state_->last_i32;
+        if (adapter_->get_i32(adapter_->obj, adapter_hdl_, &val) != 0) return;
+        if (val != state_->last_i32) {
+            int32_t old = state_->last_i32;
+            state_->last_i32 = val;
+            state_->last_bin = (val == 0) ? "0" : "1";
+            notify_value_change(old, val);
+        } else {
+            state_->last_i32 = val;
+            state_->last_bin = (val == 0) ? "0" : "1";
+        }
+    }
+
+public:
+    void *adapter_handle() const { return adapter_hdl_; }
 };
 
 // ----------------------- Callbacks -----------------------
@@ -365,6 +405,8 @@ private:
 // ----------------------- Emulator context -----------------------
 class EmuContext {
 public:
+    void set_adapter(AdapterApi *adapter) { adapter_ = adapter; }
+
     sim_time_t now() const { return now_; }
     void set_now(sim_time_t t) { now_ = t; }
 
@@ -382,10 +424,19 @@ public:
         signal_handles_[fullname].push_back(sig);
     }
 
-    int32_t get_signal_i32(const std::string &fullname) const {
+    int32_t get_signal_i32(const std::string &fullname) {
         printf("EmuContext::get_signal_i32(%s)\n", fullname.c_str());
         auto it = signals_.find(fullname);
         if (it == signals_.end()) return 0;
+        auto hit = signal_handles_.find(fullname);
+        if (adapter_ && adapter_->get_i32 && hit != signal_handles_.end() && !hit->second.empty()) {
+            EmuSignal *sig = hit->second.front();
+            int32_t val = it->second.last_i32;
+            if (adapter_->get_i32(adapter_->obj, sig->adapter_handle(), &val) == 0) {
+                it->second.last_i32 = val;
+                it->second.last_bin = (val == 0) ? "0" : "1";
+            }
+        }
         return it->second.last_i32;
     }
 
@@ -395,6 +446,11 @@ public:
         int32_t old = st.last_i32;
         st.last_i32 = value;
         st.last_bin = (value == 0) ? "0" : "1";
+        auto hit = signal_handles_.find(fullname);
+        if (adapter_ && adapter_->set_i32 && hit != signal_handles_.end() && !hit->second.empty()) {
+            EmuSignal *sig = hit->second.front();
+            adapter_->set_i32(adapter_->obj, sig->adapter_handle(), value);
+        }
         auto it = signal_handles_.find(fullname);
         if (it != signal_handles_.end()) {
             for (auto *sig : it->second) {
@@ -473,6 +529,7 @@ private:
     int exit_code_ = 0;
     bool has_seen_py_to_cpp_ = false;
     int32_t last_py_to_cpp_ = 0;
+    AdapterApi *adapter_ = nullptr;
 };
 
 // ----------------------- EmuSignal helpers -----------------------
@@ -528,8 +585,41 @@ void EmuSignal::notify_value_change(int32_t old_val, int32_t new_val) {
 // ----------------------- GPI implementation -----------------------
 class EmuImpl final : public GpiImplInterface {
 public:
-    explicit EmuImpl(EmuContext &ctx)
-        : GpiImplInterface("cocotb-emulator-v1"), ctx_(ctx) {}
+    explicit EmuImpl(EmuContext &ctx, AdapterApi &adapter)
+        : GpiImplInterface("cocotb-emulator-v1"), ctx_(ctx), adapter_(adapter) {
+        if (!adapter_.catalog || !adapter_.catalog->signals || adapter_.catalog->count <= 0) {
+            throw std::runtime_error("adapter catalog is missing or empty");
+        }
+        ctx_.set_adapter(&adapter_);
+
+        for (int i = 0; i < adapter_.catalog->count; ++i) {
+            const EmuAdapterSignal &sig = adapter_.catalog->signals[i];
+            if (!sig.fullname && !sig.name) continue;
+            std::string fullname = sig.fullname ? sig.fullname : sig.name;
+            std::string name = sig.name ? sig.name : fullname;
+
+            auto &st = ctx_.ensure_signal(fullname);
+            st.width = sig.width > 0 ? sig.width : 1;
+
+            if (sig.is_root) {
+                if (!root_) {
+                    auto obj = std::make_unique<EmuObj>(this, &ctx_, sig.handle, GPI_MODULE, true);
+                    obj->initialise(name, fullname);
+                    root_ = std::move(obj);
+                }
+                continue;
+            }
+
+            auto hdl = std::make_unique<EmuSignal>(this, &ctx_, &adapter_, name, fullname, &st, sig.handle);
+            auto *raw = hdl.get();
+            handle_cache_.emplace(fullname, std::move(hdl));
+            ctx_.register_signal_handle(fullname, raw);
+        }
+
+        if (!root_) {
+            throw std::runtime_error("adapter catalog provided no root object");
+        }
+    }
 
     // Required by your header: precision is returned via pointer
     void get_sim_precision(int32_t *precision) override {
@@ -555,11 +645,8 @@ public:
 
     // Root handle
     GpiObjHdl *get_root_handle(const char *name) override {
-        std::string root_name = name ? name : "dut";
-        if (!root_) {
-            root_ = std::make_unique<EmuObj>(this, &ctx_, nullptr, GPI_MODULE, true);
-            root_->initialise(root_name, root_name);
-        }
+        (void)name;
+        if (!root_) return nullptr;
         return root_.get();
     }
 
@@ -570,16 +657,9 @@ public:
         if (!full.empty()) full += ".";
         full += name;
 
-        auto &st = ctx_.ensure_signal(full);
-
         auto it = handle_cache_.find(full);
         if (it != handle_cache_.end()) return it->second.get();
-
-        auto sig = std::make_unique<EmuSignal>(this, &ctx_, name, full, &st);
-        auto *raw = sig.get();
-        handle_cache_.emplace(full, std::move(sig));
-        ctx_.register_signal_handle(full, raw);
-        return raw;
+        return nullptr;
     }
 
     GpiObjHdl *get_child_by_index(int32_t /*index*/, GpiObjHdl * /*parent*/) override {
@@ -646,18 +726,9 @@ public:
 
 private:
     EmuContext &ctx_;
+    AdapterApi &adapter_;
     std::unique_ptr<EmuObj> root_;
     std::unordered_map<std::string, std::unique_ptr<GpiObjHdl>> handle_cache_;
-};
-
-struct AdapterApi {
-    void *handle = nullptr;
-    void *obj = nullptr;
-    void *(*create)() = nullptr;
-    void (*destroy)(void *) = nullptr;
-    const char *(*name_obj)(void *) = nullptr;
-    int (*init_obj)(void *) = nullptr;
-    int (*shutdown_obj)(void *) = nullptr;
 };
 
 static AdapterApi load_adapter() {
@@ -679,7 +750,14 @@ static AdapterApi load_adapter() {
     api.name_obj = reinterpret_cast<const char *(*)(void *)>(dlsym(api.handle, "emulator_adapter_name_obj"));
     api.init_obj = reinterpret_cast<int (*)(void *)>(dlsym(api.handle, "emulator_adapter_init_obj"));
     api.shutdown_obj = reinterpret_cast<int (*)(void *)>(dlsym(api.handle, "emulator_adapter_shutdown_obj"));
-    if (!api.create || !api.destroy || !api.name_obj || !api.init_obj || !api.shutdown_obj) {
+    api.catalog_fn = reinterpret_cast<const EmuAdapterCatalog *(*)(void *)>(
+        dlsym(api.handle, "emulator_adapter_catalog"));
+    api.set_i32 = reinterpret_cast<int (*)(void *, void *, int32_t)>(
+        dlsym(api.handle, "emulator_adapter_set_i32"));
+    api.get_i32 = reinterpret_cast<int (*)(void *, void *, int32_t *)>(
+        dlsym(api.handle, "emulator_adapter_get_i32"));
+    if (!api.create || !api.destroy || !api.name_obj || !api.init_obj || !api.shutdown_obj || !api.catalog_fn ||
+        !api.set_i32 || !api.get_i32) {
         std::cerr << "ERROR: adapter missing required symbols\n";
         dlclose(api.handle);
         api.handle = nullptr;
@@ -728,11 +806,17 @@ int main(int argc, char **argv) {
             unload_adapter(adapter);
             return 2;
         }
+        adapter.catalog = adapter.catalog_fn ? adapter.catalog_fn(adapter.obj) : nullptr;
+        if (!adapter.catalog) {
+            std::cerr << "ERROR: adapter catalog missing\n";
+            unload_adapter(adapter);
+            return 2;
+        }
         std::cout << "[emulator] using adapter: "
                   << (adapter.name_obj ? adapter.name_obj(adapter.obj) : "unknown") << "\n";
 
         EmuContext ctx;
-        EmuImpl impl(ctx);
+        EmuImpl impl(ctx, adapter);
 
         if (gpi_register_impl(&impl) != 0) {
             std::cerr << "ERROR: gpi_register_impl failed\n";

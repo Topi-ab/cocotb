@@ -1,5 +1,8 @@
+#include <cstdint>
 #include <cstdio>
 #include <string>
+
+#include "emulator.hpp"
 
 namespace {
 
@@ -21,26 +24,27 @@ private:
     std::string name_ = "adapter_stub";
 };
 
-AdapterStub &instance() {
-    static AdapterStub inst;
-    return inst;
-}
+// Dummy opaque handles
+struct DummyHandle {
+    int id;
+    int32_t value;
+};
+
+DummyHandle root_handle{0, 0};
+DummyHandle py_to_cpp_handle{1, 0};
+DummyHandle cpp_to_py_handle{2, 0};
+
+EmuAdapterSignal signals[] = {
+    {"dut", "dut", 0, &root_handle, -1, true},
+    {"py_to_cpp", "dut.py_to_cpp", 1, &py_to_cpp_handle, 0, false},
+    {"cpp_to_py", "dut.cpp_to_py", 1, &cpp_to_py_handle, 0, false},
+};
+
+const EmuAdapterCatalog catalog{signals, static_cast<int>(sizeof(signals) / sizeof(signals[0]))};
 
 }  // namespace
 
 extern "C" {
-
-const char *emulator_adapter_name() {
-    return instance().name();
-}
-
-int emulator_adapter_init() {
-    return instance().init();
-}
-
-int emulator_adapter_shutdown() {
-    return instance().shutdown();
-}
 
 void *emulator_adapter_create() {
     return new AdapterStub();
@@ -60,6 +64,26 @@ int emulator_adapter_init_obj(void *hdl) {
 
 int emulator_adapter_shutdown_obj(void *hdl) {
     return static_cast<AdapterStub *>(hdl)->shutdown();
+}
+
+const EmuAdapterCatalog *emulator_adapter_catalog(void * /*hdl*/) {
+    return &catalog;
+}
+
+int emulator_adapter_set_i32(void * /*hdl*/, void *sig_handle, int32_t value) {
+    auto *h = static_cast<DummyHandle *>(sig_handle);
+    std::printf("[adapter_stub] set handle=%d value=%d\n", h ? h->id : -1, value);
+    // store value in the handle for later reads
+    if (h) h->value = value;
+    return 0;
+}
+
+int emulator_adapter_get_i32(void * /*hdl*/, void *sig_handle, int32_t *out) {
+    auto *h = static_cast<DummyHandle *>(sig_handle);
+    int32_t val = h ? h->value : 0;
+    std::printf("[adapter_stub] get handle=%d -> %d\n", h ? h->id : -1, val);
+    if (out) *out = val;
+    return 0;
 }
 
 }  // extern "C"
