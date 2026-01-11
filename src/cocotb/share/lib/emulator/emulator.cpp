@@ -177,6 +177,13 @@ public:
         m_fullname = fullname;
         m_length = state_ ? state_->width : 1;
         m_const = false;
+        if (state_ && state_->width > 1) {
+            m_num_elems = state_->width;
+            m_indexable = true;
+            m_range_left = state_->width - 1;
+            m_range_right = 0;
+            m_range_dir = GPI_RANGE_DOWN;
+        }
     }
 
     // Readbacks
@@ -210,6 +217,9 @@ public:
     int set_signal_value(const int32_t value, gpi_set_action action) override {
         (void)action;
         if (!state_) return -1;
+        if (g_emu_debug) {
+            std::printf("[emu] set long %s = %d\n", m_fullname.c_str(), value);
+        }
         int32_t old = state_->last_i32;
         state_->last_i32 = value;
         if (adapter_ && adapter_->set_i32) {
@@ -230,6 +240,9 @@ public:
     int set_signal_value_str(std::string &value, gpi_set_action action) override {
         (void)action;
         if (!state_) return -1;
+        if (g_emu_debug) {
+            std::printf("[emu] set str %s = %s\n", m_fullname.c_str(), value.c_str());
+        }
         int32_t old = state_->last_i32;
         state_->last_bin = value;
         int32_t parsed = 0;
@@ -281,6 +294,114 @@ private:
 
 public:
     void *adapter_handle() const { return adapter_hdl_; }
+    SignalState *state() const { return state_; }
+};
+
+class EmuSignalBit : public GpiSignalObjHdl {
+public:
+    EmuSignalBit(GpiImplInterface *impl,
+                 EmuContext *ctx,
+                 AdapterApi *adapter,
+                 const std::string &name,
+                 const std::string &fullname,
+                 SignalState *parent_state,
+                 void *adapter_hdl,
+                 int bit_index)
+        : GpiSignalObjHdl(impl, adapter_hdl, GPI_LOGIC, false),
+          ctx_(ctx),
+          adapter_(adapter),
+          parent_state_(parent_state),
+          adapter_hdl_(adapter_hdl),
+          bit_(bit_index) {
+        m_name = name;
+        m_fullname = fullname;
+        m_length = 1;
+        m_const = false;
+    }
+
+    const char *get_signal_value_binstr() override {
+        refresh_parent();
+        tmp_ = (get_bit() != 0) ? "1" : "0";
+        return tmp_.c_str();
+    }
+
+    const char *get_signal_value_str() override {
+        refresh_parent();
+        tmp_ = (get_bit() != 0) ? "1" : "0";
+        return tmp_.c_str();
+    }
+
+    double get_signal_value_real() override { return 0.0; }
+
+    long get_signal_value_long() override {
+        refresh_parent();
+        return get_bit();
+    }
+
+    int set_signal_value(const int32_t value, gpi_set_action action) override {
+        (void)action;
+        if (!parent_state_) return -1;
+        int32_t parent_val = parent_state_->last_i32;
+        if (adapter_ && adapter_->get_i32) {
+            int32_t tmp = parent_val;
+            if (adapter_->get_i32(adapter_->obj, adapter_hdl_, &tmp) == 0) {
+                parent_val = tmp;
+            }
+        }
+        int32_t new_val = parent_val;
+        if (value) {
+            new_val |= (1 << bit_);
+        } else {
+            new_val &= ~(1 << bit_);
+        }
+        parent_state_->last_i32 = new_val;
+        parent_state_->last_bin = format_bin(new_val, parent_state_->width);
+        if (adapter_ && adapter_->set_i32) {
+            if (adapter_->set_i32(adapter_->obj, adapter_hdl_, new_val) != 0) return -1;
+        }
+        return 0;
+    }
+
+    int set_signal_value(const double /*value*/, gpi_set_action /*action*/) override {
+        return -1;
+    }
+
+    int set_signal_value_str(std::string &value, gpi_set_action action) override {
+        if (value == "0") return set_signal_value(0, action);
+        if (value == "1") return set_signal_value(1, action);
+        return -1;
+    }
+
+    int set_signal_value_binstr(std::string &value, gpi_set_action action) override {
+        return set_signal_value_str(value, action);
+    }
+
+    GpiCbHdl *register_value_change_callback(
+        gpi_edge edge, int (*gpi_function)(void *), void *cb_data) override {
+        // Delegate to parent signal callbacks; bit-level callbacks not supported.
+        return nullptr;
+    }
+
+private:
+    int get_bit() const {
+        if (!parent_state_) return 0;
+        return (parent_state_->last_i32 >> bit_) & 0x1;
+    }
+
+    void refresh_parent() {
+        if (!parent_state_ || !adapter_ || !adapter_->get_i32) return;
+        int32_t val = parent_state_->last_i32;
+        if (adapter_->get_i32(adapter_->obj, adapter_hdl_, &val) != 0) return;
+        parent_state_->last_i32 = val;
+        parent_state_->last_bin = format_bin(val, parent_state_->width);
+    }
+
+    EmuContext *ctx_;
+    AdapterApi *adapter_;
+    SignalState *parent_state_;
+    void *adapter_hdl_;
+    int bit_;
+    std::string tmp_;
 };
 
 // ----------------------- Callbacks -----------------------
@@ -695,8 +816,45 @@ public:
         return nullptr;
     }
 
-    GpiObjHdl *get_child_by_index(int32_t /*index*/, GpiObjHdl * /*parent*/) override {
-        return nullptr;
+    GpiObjHdl *get_child_by_index(int32_t index, GpiObjHdl *parent) override {
+        if (!parent) return nullptr;
+        if (parent->get_type() != GPI_LOGIC_ARRAY) return nullptr;
+        int left = parent->get_range_left();
+        int right = parent->get_range_right();
+        gpi_range_dir dir = parent->get_range_dir();
+        if (dir == GPI_RANGE_NO_DIR) return nullptr;
+        if (dir == GPI_RANGE_DOWN) {
+            if (index > left || index < right) return nullptr;
+        } else if (dir == GPI_RANGE_UP) {
+            if (index < left || index > right) return nullptr;
+        }
+
+        int bit = (dir == GPI_RANGE_DOWN) ? (index - right) : (index - left);
+        if (bit < 0) return nullptr;
+
+        std::string full = parent->get_fullname();
+        std::string name = parent->get_name();
+        std::string idx = "[" + std::to_string(index) + "]";
+        full += idx;
+        name += idx;
+
+        auto it = handle_cache_.find(full);
+        if (it != handle_cache_.end()) return it->second.get();
+
+        auto *parent_sig = dynamic_cast<EmuSignal *>(parent);
+        if (!parent_sig) return nullptr;
+
+        auto hdl = std::make_unique<EmuSignalBit>(this,
+                                                  &ctx_,
+                                                  &adapter_,
+                                                  name,
+                                                  full,
+                                                  parent_sig->state(),
+                                                  parent_sig->adapter_handle(),
+                                                  bit);
+        auto *raw = hdl.get();
+        handle_cache_.emplace(full, std::move(hdl));
+        return raw;
     }
 
     GpiObjHdl *get_child_from_handle(void * /*raw_hdl*/, GpiObjHdl * /*parent*/) override {

@@ -1,5 +1,5 @@
 import cocotb
-from cocotb.triggers import Timer, RisingEdge, FallingEdge
+from cocotb.triggers import Timer, RisingEdge, FallingEdge, ReadWrite
 
 
 @cocotb.test()
@@ -20,4 +20,16 @@ async def smoke_signal_propagation(dut):
         dut.py_to_cpp.value = 1
         await Timer(0.5, "ns")
 
-#    await Timer(10, "us")
+    # Vector signal smoke: bus value and bit access.
+    dut.vec.value = 0b1010
+    await ReadWrite()
+    assert int(dut.vec.value) == 0b1010
+    vec = dut.vec.value
+    assert int(vec[0]) == 0
+    assert int(vec[1]) == 1
+    assert int(vec[2]) == 0
+    assert int(vec[3]) == 1
+
+    dut.vec.value = 0b1011
+    await ReadWrite()
+    assert int(dut.vec.value) == 0b1011

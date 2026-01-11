@@ -33,11 +33,13 @@ struct DummyHandle {
 DummyHandle root_handle{0, 0};
 DummyHandle py_to_cpp_handle{1, 0};
 DummyHandle cpp_to_py_handle{2, 0};
+DummyHandle vec_handle{3, 0};
 
 EmuAdapterSignal signals[] = {
     {"dut", "dut", 0, &root_handle, -1, true},
     {"py_to_cpp", "dut.py_to_cpp", 1, &py_to_cpp_handle, 0, false},
     {"cpp_to_py", "dut.cpp_to_py", 1, &cpp_to_py_handle, 0, false},
+    {"vec", "dut.vec", 4, &vec_handle, 0, false},
 };
 
 const EmuAdapterCatalog catalog{signals, static_cast<int>(sizeof(signals) / sizeof(signals[0]))};

@@ -14,7 +14,22 @@ fi
 PYGPI_PYTHON_BIN=${PYGPI_PYTHON_BIN:-${VIRTUAL_ENV:+$VIRTUAL_ENV/bin/python}}
 PYGPI_PYTHON_BIN=${PYGPI_PYTHON_BIN:-python3}
 
-g++ -std=c++20 -O0 -g0 -DNDEBUG -fPIC -shared \
+if command -v ccache >/dev/null 2>&1; then
+  CXX="ccache g++"
+else
+  CXX="g++"
+fi
+
+$CXX -std=c++20 -O0 -g0 -DNDEBUG \
+  -I"$REPO_ROOT/src/cocotb/share/include" \
+  -I"$REPO_ROOT/src/cocotb" \
+  -I"$REPO_ROOT/src/cocotb/share/lib/gpi" \
+  "$REPO_ROOT/src/cocotb/share/lib/emulator/emulator.cpp" \
+  -L"$REPO_ROOT/src/cocotb/libs" -lgpi -ldl \
+  -Wl,-rpath,'$ORIGIN' \
+  -o "$REPO_ROOT/src/cocotb/libs/emulator"
+
+$CXX -std=c++20 -O0 -g0 -DNDEBUG -fPIC -shared \
   -I"$REPO_ROOT/src/cocotb/share/lib/emulator" \
   "$STUB_DIR/smoke_adapter.cpp" \
   -o "$REPO_ROOT/src/cocotb/libs/libemu_adapter.so"
@@ -23,6 +38,7 @@ export PYGPI_PYTHON_BIN
 export COCOTB_TEST_MODULES=test_smoke_v2
 export COCOTB_TOPLEVEL=dut
 export COCOTB_TOPLEVEL_LANG=verilog
+export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export GPI_USERS=$("$PYGPI_PYTHON_BIN" -m cocotb_tools.config --pygpi-entry-point)
 export EMULATOR_ADAPTER_SO="$REPO_ROOT/src/cocotb/libs/libemu_adapter.so"
 
