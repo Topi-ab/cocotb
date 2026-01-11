@@ -13,3 +13,6 @@
 * Join the discussion in the [Gitter chat room](https://gitter.im/cocotb/Lobby)
 * [Ask a question](https://github.com/cocotb/cocotb/discussions)
 * [Raise a bug / request an enhancement](https://github.com/cocotb/cocotb/issues/new)
+
+
+( CodeX: use sandbox_permissions="require_escalated" to access docker)

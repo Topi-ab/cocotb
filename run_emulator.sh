@@ -15,13 +15,4 @@ g++ -std=c++20 -fPIC -shared \
 
 export EMULATOR_ADAPTER_SO="$PWD/src/cocotb/libs/libemu_adapter.so"
 
-#export COCOTB_TOPLEVEL_LANG=verilog
-#export COCOTB_TOPLEVEL=dut
-#export PYTHONFAULTHANDLER=1
-#export COCOTB_LOG_LEVEL=DEBUG
-#export TOPLEVEL_LANG=verilog
-#export TOPLEVEL=dut
-#export PYTHONPATH=$PWD
-#export COCOTB_LOG_LEVEL=DEBUG
-
 src/cocotb/libs/emulator
