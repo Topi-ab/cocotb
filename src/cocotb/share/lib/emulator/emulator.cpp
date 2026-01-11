@@ -35,6 +35,8 @@
 #include "gpi.h"
 #include "gpi_priv.hpp"
 
+static const bool g_emu_debug = (std::getenv("EMU_EMULATOR_DEBUG") != nullptr);
+
 // ----------------------- Timebase -----------------------
 using sim_time_t = std::uint64_t;     // 1 step = 1 ps
 static constexpr int32_t SIM_PRECISION_LOG10 = -12;  // 1 ps
@@ -117,6 +119,29 @@ struct SignalState {
 
 class EmuContext;
 
+static std::string format_bin(int32_t value, int32_t width) {
+    int32_t bits = width > 0 ? width : 1;
+    if (bits > 32) bits = 32;
+    std::string out(static_cast<std::size_t>(bits), '0');
+    uint32_t v = static_cast<uint32_t>(value);
+    for (int i = 0; i < bits; ++i) {
+        int bit = bits - 1 - i;
+        out[static_cast<std::size_t>(i)] = ((v >> bit) & 1u) ? '1' : '0';
+    }
+    return out;
+}
+
+static bool parse_bin(const std::string &value, int32_t *out) {
+    if (value.empty() || !out) return false;
+    uint32_t acc = 0;
+    for (char c : value) {
+        if (c != '0' && c != '1') return false;
+        acc = (acc << 1) | static_cast<uint32_t>(c - '0');
+    }
+    *out = static_cast<int32_t>(acc);
+    return true;
+}
+
 // ----------------------- Minimal handles -----------------------
 class EmuObj : public GpiObjHdl {
 public:
@@ -156,6 +181,9 @@ public:
 
     // Readbacks
     const char *get_signal_value_binstr() override {
+        if (g_emu_debug) {
+            std::printf("[emu] get binstr %s\n", m_fullname.c_str());
+        }
         refresh_from_adapter();
         tmp_ = state_ ? state_->last_bin : std::string("0");
         return tmp_.c_str();
@@ -170,6 +198,9 @@ public:
     double get_signal_value_real() override { return 0.0; }
 
     long get_signal_value_long() override {
+        if (g_emu_debug) {
+            std::printf("[emu] get long %s\n", m_fullname.c_str());
+        }
         refresh_from_adapter();
         // cocotb API still exposes long reads; we return the stored int32.
         return state_ ? static_cast<long>(state_->last_i32) : 0L;
@@ -181,13 +212,12 @@ public:
         if (!state_) return -1;
         int32_t old = state_->last_i32;
         state_->last_i32 = value;
-        // v1: simplistic bin conversion for 0/1 only (expand later)
         if (adapter_ && adapter_->set_i32) {
             if (adapter_->set_i32(adapter_->obj, adapter_hdl_, value) != 0) {
                 return -1;
             }
         }
-        state_->last_bin = (value == 0) ? "0" : "1";
+        state_->last_bin = format_bin(value, state_->width);
         notify_value_change(old, state_->last_i32);
         return 0;
     }
@@ -202,8 +232,8 @@ public:
         if (!state_) return -1;
         int32_t old = state_->last_i32;
         state_->last_bin = value;
-        if (value == "0") state_->last_i32 = 0;
-        else if (value == "1") state_->last_i32 = 1;
+        int32_t parsed = 0;
+        if (parse_bin(value, &parsed)) state_->last_i32 = parsed;
         if (adapter_ && adapter_->set_i32) {
             if (adapter_->set_i32(adapter_->obj, adapter_hdl_, state_->last_i32) != 0) {
                 return -1;
@@ -235,14 +265,17 @@ private:
         if (!state_ || !adapter_ || !adapter_->get_i32) return;
         int32_t val = state_->last_i32;
         if (adapter_->get_i32(adapter_->obj, adapter_hdl_, &val) != 0) return;
+        if (g_emu_debug) {
+            std::printf("[emu] refresh %s -> %d\n", m_fullname.c_str(), val);
+        }
         if (val != state_->last_i32) {
             int32_t old = state_->last_i32;
             state_->last_i32 = val;
-            state_->last_bin = (val == 0) ? "0" : "1";
+            state_->last_bin = format_bin(val, state_->width);
             notify_value_change(old, val);
         } else {
             state_->last_i32 = val;
-            state_->last_bin = (val == 0) ? "0" : "1";
+            state_->last_bin = format_bin(val, state_->width);
         }
     }
 
