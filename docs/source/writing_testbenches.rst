@@ -295,6 +295,18 @@ All named objects, including those with the aforementioned limitations, can be a
     dut["_some_signal"]  # begins with underscore
     dut["\\!WOOOOW!\\"]  # escaped identifier (Verilog), extended identifier (VHDL)
 
+Names follow the case rules of the HDL.
+VHDL basic identifiers are case insensitive,
+so every spelling of a name gives the same object.
+VHDL extended identifiers and all Verilog names are case sensitive
+and are only found in exactly their case.
+
+.. code-block:: python
+
+    assert dut.data_in is dut.DATA_IN  # VHDL basic identifier
+    assert dut["\\Foo\\"] is not dut["\\foo\\"]  # VHDL extended identifiers
+    assert dut.foo is not dut.FOO  # Verilog
+
 
 .. _writing_tbs_accessing_verilog_packages:
 

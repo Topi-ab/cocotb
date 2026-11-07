@@ -9,8 +9,28 @@
 #include <vpi_user_ext.h>
 
 #include "../logging.hpp"
+#include "../vhdl_names.hpp"
 #include "_vendor/vpi/sv_vpi_user.h"
 #include "_vendor/vpi/vpi_user.h"
+
+/* Names follow the rules of the language of the design: VHDL for GHDL, which
+ * is a VHDL simulator, Verilog (case sensitive) for everything else.
+ *
+ * The functions are the same in every build of this file (only the constant
+ * differs), so that coverage data of the builds can be merged. */
+#ifdef GHDL
+static const bool vhdl_names = true;
+#else
+static const bool vhdl_names = false;
+#endif
+
+static std::string canonical_name(const std::string &name) {
+    return vhdl_names ? vhdl_canonical_name(name) : name;
+}
+
+static bool names_equal(const std::string &a, const std::string &b) {
+    return vhdl_names ? vhdl_names_equal(a, b) : a == b;
+}
 
 #define CASE_STR(_X) \
     case _X:         \
@@ -361,7 +381,7 @@ GpiObjHdl *VpiImpl::create_gpi_obj_from_handle(vpiHandle new_hdl,
         case vpiGenScopeArray: {
             std::string hdl_name = vpi_get_str(vpiName, new_hdl);
 
-            if (hdl_name != resolved_name) {
+            if (!names_equal(hdl_name, resolved_name)) {
                 LOG_DEBUG("Found pseudo-region %s (hdl_name=%s but name=%s)",
                           fq_name.c_str(), hdl_name.c_str(),
                           resolved_name.c_str());
@@ -391,7 +411,9 @@ GpiObjHdl *VpiImpl::create_gpi_obj_from_handle(vpiHandle new_hdl,
             return NULL;
     }
 
-    new_obj->initialise(resolved_name, resolved_fq_name);
+    /* The handle store identifies objects by their full name, so it must be
+       the same however the object was reached. */
+    new_obj->initialise(resolved_name, canonical_name(resolved_fq_name));
     new_obj->set_is_resolved_reference(resolved_hdl != NULL);
 
     LOG_DEBUG("VPI: Created GPI object from type %s(%d)",
@@ -424,6 +446,32 @@ GpiObjHdl *VpiImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
     return new_obj;
 }
 
+/* Find the child of *parent* whose name is exactly *name* by iterating
+ * *parent*. */
+static GpiObjHdl *find_child_by_exact_name(GpiImplInterface *impl,
+                                           const std::string &name,
+                                           GpiObjHdl *parent) {
+    VpiIterator iter(impl, parent);
+    while (true) {
+        std::string child_name;
+        GpiObjHdl *child = NULL;
+        void *raw_hdl = NULL;
+        switch (iter.next_handle(child_name, &child, &raw_hdl)) {
+            case GpiIterator::NATIVE:
+                if (child_name == name) return child;
+                delete child;
+                break;
+            case GpiIterator::NOT_NATIVE_NO_NAME:
+                vpi_free_object(static_cast<vpiHandle>(raw_hdl));
+                break;
+            case GpiIterator::END:
+                return NULL;
+            default:
+                break;
+        }
+    }
+}
+
 GpiObjHdl *VpiImpl::get_child_by_name(const std::string &name,
                                       GpiObjHdl *parent) {
     const vpiHandle parent_hdl = parent->get_handle<vpiHandle>();
@@ -433,6 +481,18 @@ GpiObjHdl *VpiImpl::get_child_by_name(const std::string &name,
     vpiHandle new_hdl =
         vpi_handle_by_name(const_cast<char *>(fq_name.c_str()), NULL);
     bool owns_handle = true;
+
+    /* GHDL matches VHDL extended identifiers case insensitively and may
+     * return an object whose name differs in case. */
+    if (vhdl_names && new_hdl != NULL && vhdl_is_extended_identifier(name)) {
+        const char *found_name = vpi_get_str(vpiName, new_hdl);
+        if (!found_name || !vhdl_extended_name_matches(found_name, name)) {
+            LOG_DEBUG("VPI: %s matched %s, searching for an exact match",
+                      fq_name.c_str(), found_name ? found_name : "(null)");
+            vpi_free_object(new_hdl);
+            return find_child_by_exact_name(this, name, parent);
+        }
+    }
 
 #ifdef IUS
     if (new_hdl != NULL && vpi_get(vpiType, new_hdl) == vpiGenScope) {
@@ -718,7 +778,8 @@ GpiObjHdl *VpiImpl::get_root_handle(const char *name) {
         // prevents finding virtual classes (which Xcelium puts at the top-level
         // scope) when looking for objects with get_root_handle.
         const char *obj_name = vpi_get_str(vpiFullName, root);
-        if ((!name && obj_name[0] != '\\') || (name && !strcmp(name, obj_name)))
+        if ((!name && obj_name[0] != '\\') ||
+            (name && names_equal(name, obj_name)))
             break;
         vpi_free_object(root);
     }
@@ -736,7 +797,7 @@ GpiObjHdl *VpiImpl::get_root_handle(const char *name) {
 
     root_name = vpi_get_str(vpiFullName, root);
     rv = new VpiObjHdl(this, root, to_gpi_objtype(vpi_get(vpiType, root)));
-    rv->initialise(root_name, root_name);
+    rv->initialise(root_name, canonical_name(root_name));
 
     return rv;
 
@@ -889,7 +950,7 @@ bool VpiImpl::compare_generate_labels(const std::string &a,
     /* Compare two generate labels for equality ignoring any suffixed index. */
     std::size_t a_idx = a.rfind("[");
     std::size_t b_idx = b.rfind("[");
-    return a.substr(0, a_idx) == b.substr(0, b_idx);
+    return names_equal(a.substr(0, a_idx), b.substr(0, b_idx));
 }
 
 const char *VpiImpl::get_type_delimiter(GpiObjHdl *obj_hdl) {
