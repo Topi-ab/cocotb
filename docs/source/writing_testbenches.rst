@@ -300,6 +300,8 @@ VHDL basic identifiers are case insensitive,
 so every spelling of a name gives the same object.
 VHDL extended identifiers and all Verilog names are case sensitive
 and are only found in exactly their case.
+An extended identifier is written as in the source, with a backslash in it written twice
+(``dut["\\a\\\\b\\"]`` for ``\a\\b\``).
 Iterating a parent can list an object once for each spelling it has been accessed with.
 
 .. code-block:: python

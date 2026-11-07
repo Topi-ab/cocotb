@@ -1,0 +1,80 @@
+[
+  {
+    "what": "no case folding",
+    "old": "if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');",
+    "new": ";",
+    "first_only": false
+  },
+  {
+    "what": "two underscores in a basic identifier",
+    "old": "return alnum ? kBasic : kDead;",
+    "new": "return (alnum || c == '_') ? kBasic : kDead;",
+    "first_only": true
+  },
+  {
+    "what": "backslash not doubled in the source form",
+    "old": "if (c == '\\\\') r += '\\\\';",
+    "new": ";",
+    "first_only": false
+  },
+  {
+    "what": "empty identifier in the single-backslash form",
+    "old": "j >= 2; --j",
+    "new": "j >= 1; --j",
+    "first_only": false
+  },
+  {
+    "what": "empty extended identifier",
+    "old": "return j > i + 1 ? j + 1 : std::string::npos;",
+    "new": "return j + 1;",
+    "first_only": false
+  },
+  {
+    "what": "'.' in an index identifier",
+    "old": "if (alnum) return kIdxBasic;",
+    "new": "if (alnum || c == '.') return kIdxBasic;",
+    "first_only": false
+  },
+  {
+    "what": "a name may end inside an index",
+    "old": "return state == kBasic || state == kExtBs || state == kIdxEnd;",
+    "new": "return state == kBasic || state == kExtBs || state == kIdxEnd || state == kIdxItemEnd;",
+    "first_only": false
+  },
+  {
+    "what": "extended identifier key without backslashes",
+    "old": "if (m_kind == Kind::Extended) return escape(m_identifier);",
+    "new": "if (m_kind == Kind::Extended) return m_identifier;",
+    "first_only": false
+  },
+  {
+    "what": "index skips to the next backslash (an earlier bug)",
+    "old": "std::size_t end = extended_end(s, i);",
+    "new": "std::size_t end = s.find('\\\\', i + 1) == std::string::npos ? std::string::npos : s.find('\\\\', i + 1) + 1;",
+    "first_only": true
+  },
+  {
+    "what": "empty extended identifier in the state machine (an earlier bug)",
+    "old": "if (c == '\\\\') return kExtPair;",
+    "new": "if (c == '\\\\') return kExtBs;",
+    "first_only": true
+  },
+  {
+    "what": "same_identifier compares the text first (an earlier version)",
+    "old": "return identifier_key() == other.identifier_key();",
+    "new": "return m_text == other.m_text || identifier_key() == other.identifier_key();",
+    "first_only": false
+  },
+  {
+    "what": "character literal folded in an index key",
+    "old": "r.append(index, i, 3);",
+    "new": "r += to_upper(index.substr(i, 3));",
+    "first_only": true
+  },
+  {
+    "what": "last_component reads past an extended identifier that does not end",
+    "old": "if (end == std::string::npos) break;",
+    "new": "if (end == std::string::npos) continue;",
+    "first_only": false
+  }
+]

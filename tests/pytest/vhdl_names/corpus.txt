@@ -1,0 +1,81 @@
+# Names checked first (test_vhdl_names.py: test_corpus). One per line: the bytes
+# in hex ('-' for the empty name), then why the name is here: failures found by
+# the longer runs (which take far longer to find them again), edge cases, and
+# examples from independent readings of the class. Add new failures here.
+5c282e012e01295c5c285c5c295c2829 found by the random run
+5ce4275c5c282d41305c5c5f5c286129 found by the random run
+5c205c5c282d2d5c5c2941012c5c2829 found by the random run
+5c5c5c2de4285c285c41285c28612e29 found by the random run
+5c2e5f292c5c5c015c285c5f5c282829 found by the random run
+5c5c5c5c285c305c2829 found by the exhaustive run
+5c5c5c5c285c295c2829 found by the exhaustive run
+5c5c5c5c285c425c2829 found by the exhaustive run
+5c5c5c5c285c2c5c2829 found by the exhaustive run
+5c5c5c5c285c615c2829 found by the exhaustive run
+5c5c5c5c285c275c2829 found by the exhaustive run
+5c5c5c5c285c285c2829 found by the exhaustive run
+- edge case
+5c edge case
+5c5c edge case
+5c5c5c edge case
+5c5c5c5c edge case
+61 edge case
+41 edge case
+615f62 edge case
+615f5f62 edge case
+5f61 edge case
+615f edge case
+6131 edge case
+3161 edge case
+5c615c edge case
+5c415c edge case
+5c615c5c625c edge case
+5c615c625c edge case
+5c615c283029 edge case
+5c615c2830295c edge case
+61283029 edge case
+61282d3129 edge case
+6128315f3029 edge case
+6128313029 edge case
+612827612729 edge case
+612827412729 edge case
+612827272729 edge case
+6128275c2729 edge case
+612827292729 edge case
+6128622c6329 edge case
+61285c425c29 edge case
+61283029283129 edge case
+612829 edge case
+6128 edge case
+6129 edge case
+283029 edge case
+67656e5f5f30 edge case
+23494d504c4943495423 edge case
+735f5f3231385f33 edge case
+e4 edge case
+c4 edge case
+6ee4797465 edge case
+612062 edge case
+5c6120625c edge case
+5c61015c edge case
+5c4261636b5c536c6173685c edge case
+5c4261636b5c5c536c6173685c edge case
+5c415c285c415c2829 edge case
+5c615c5c625c785c example of an independent reading
+615c5c625c78 example of an independent reading
+5c61625c5c example of an independent reading
+5c61625c5c5c example of an independent reading
+5c615c5c5c5c625c example of an independent reading
+616263282029 example of an independent reading
+662827002729 example of an independent reading
+6162632878207929 example of an independent reading
+5c61005c example of an independent reading
+5c6120625c28202029 example of an independent reading
+66285c615c5c29 example of an independent reading
+616263 example of an independent reading
+414243 example of an independent reading
+5c6162 example of an independent reading
+5c4142 example of an independent reading
+283129 example of an independent reading
+6628312978283229 example of an independent reading
+612878207929 example of an independent reading

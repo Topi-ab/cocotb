@@ -227,7 +227,7 @@ GpiObjHdl *FliImpl::create_gpi_obj_from_handle(void *hdl,
     new_obj->set_key(parent ? vhdl_child_key(parent->get_key(),
                                              parent->get_fullname(), fq_name,
                                              parent->is_this_impl(this))
-                            : vhdl_canonical_component(fq_name));
+                            : vhdl_component_key(fq_name));
 
     return new_obj;
 }
@@ -278,7 +278,7 @@ static GpiObjHdl *find_child_by_exact_name(GpiImplInterface *impl,
         void *raw_hdl = NULL;
         switch (iter.next_handle(child_name, &child, &raw_hdl)) {
             case GpiIterator::NATIVE:
-                if (child_name == name) return child;
+                if (vhdl_names_equal(child_name, name)) return child;
                 delete child;
                 break;
             case GpiIterator::END:
@@ -338,7 +338,7 @@ GpiObjHdl *FliImpl::get_child_by_name(const std::string &name,
     PLI_INT32 accType;
     PLI_INT32 accFullType;
     /* Name of the object found, to check an extended identifier. */
-    bool check_name = vhdl_is_extended_identifier(name);
+    bool check_name = vhdl_is_extended(name);
     std::string found_name;
 
     if (search_rgn && (hdl = mti_FindRegion(&writable[0])) != NULL) {
@@ -789,9 +789,7 @@ GpiIterator *FliImpl::iterate_handle(GpiObjHdl *obj_hdl,
 bool FliImpl::compare_generate_labels(const std::string &a,
                                       const std::string &b) {
     /* Compare two generate labels for equality ignoring any suffixed index. */
-    std::size_t a_idx = a.rfind("(");
-    std::size_t b_idx = b.rfind("(");
-    return vhdl_names_equal(a.substr(0, a_idx), b.substr(0, b_idx));
+    return vhdl_same_identifier(a, b);
 }
 
 decltype(FliIterator::iterate_over) FliIterator::iterate_over = [] {

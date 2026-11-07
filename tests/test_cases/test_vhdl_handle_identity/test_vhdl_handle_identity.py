@@ -28,7 +28,6 @@ from cocotb.triggers import Timer
 
 SIM_NAME = cocotb.SIM_NAME.lower()
 IS_GHDL = SIM_NAME.startswith("ghdl")
-IS_NVC = SIM_NAME.startswith("nvc")
 
 Spelling = tuple[str, tuple[str, ...], tuple[str, ...]]
 
@@ -123,12 +122,6 @@ async def extended_identifiers_stay_distinct(dut: Any) -> None:
     await check_distinct(dut, EXTENDED_PAIRS)
 
 
-@cocotb.xfail(
-    IS_NVC,
-    raises=KeyError,
-    reason="NVC does not find extended identifiers with a backslash in them "
-    "by their source form",
-)
 @cocotb.test
 async def extended_identifiers_with_backslash_stay_distinct(dut: Any) -> None:
     """The same with a backslash (written twice) in the extended identifiers."""
@@ -141,6 +134,27 @@ async def extended_identifier_other_case_not_found(dut: Any) -> None:
     for name in ("\\EXT_SIG\\", "\\BACK\\\\SLASH\\", "\\Back\\\\SLASH\\"):
         with pytest.raises(KeyError):
             dut[name]
+
+
+def written_once(name: str) -> str:
+    """*name*, an extended identifier, with the backslash in it written once."""
+    return "\\" + name[1:-1].replace("\\\\", "\\") + "\\"
+
+
+@cocotb.test
+async def extended_identifiers_written_once(dut: Any) -> None:
+    """With the backslash in it written once, as some simulators report it, an
+    extended identifier gives the same object or is not found, and is not found
+    in another case."""
+    for name in ("\\BACK\\\\SLASH\\", "\\Back\\\\SLASH\\", "\\back\\\\SLASH\\"):
+        with pytest.raises(KeyError):
+            dut[written_once(name)]
+    for name in BACKSLASH_NAMES:
+        try:
+            handle = dut[written_once(name)]
+        except KeyError:
+            continue  # this simulator does not know this form
+        assert handle is dut[name], name
 
 
 @cocotb.test

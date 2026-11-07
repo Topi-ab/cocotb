@@ -538,7 +538,7 @@ GpiObjHdl *VhpiImpl::create_gpi_obj_from_handle(vhpiHandleT new_hdl,
         new_obj->set_key(
             parent ? vhdl_child_key(parent->get_key(), parent->get_fullname(),
                                     fq_name, parent->is_this_impl(this))
-                   : vhdl_canonical_component(fq_name));
+                   : vhdl_component_key(fq_name));
     }
 
 out:
@@ -597,7 +597,7 @@ static GpiObjHdl *find_child_by_exact_name(GpiImplInterface *impl,
         void *raw_hdl = NULL;
         switch (iter.next_handle(child_name, &child, &raw_hdl)) {
             case GpiIterator::NATIVE:
-                if (child_name == name) return child;
+                if (vhdl_names_equal(child_name, name)) return child;
                 delete child;
                 break;
             case GpiIterator::NOT_NATIVE_NO_NAME:
@@ -624,9 +624,24 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
 
     new_hdl = vhpi_handle_by_name(&writable[0], NULL);
 
+    /* Some simulators do not find an extended identifier with a backslash in
+     * it by its source form (the backslash written twice), only with the
+     * backslash written once. The object is then known by that name. */
+    if (new_hdl == NULL && vhdl_is_extended(name)) {
+        std::string single = VhdlName(name).single_backslash_form();
+        if (single != name) {
+            std::string single_fq_name = fully_qualified_name(single, parent);
+            std::vector<char> single_writable(single_fq_name.begin(),
+                                              single_fq_name.end());
+            single_writable.push_back('\0');
+            new_hdl = vhpi_handle_by_name(&single_writable[0], NULL);
+            if (new_hdl != NULL) fq_name = single_fq_name;
+        }
+    }
+
     /* Some simulators also match extended identifiers case insensitively and
      * may return an object whose name differs in case. */
-    if (new_hdl != NULL && vhdl_is_extended_identifier(name)) {
+    if (new_hdl != NULL && vhdl_is_extended(name)) {
         const char *found_name = vhpi_get_str(vhpiCaseNameP, new_hdl);
         if (vhdl_extended_name_differs(found_name, name)) {
             LOG_DEBUG("VHPI: %s matched %s, searching for an exact match",
@@ -1225,10 +1240,13 @@ void VhpiImpl::sim_end() {
 
 bool VhpiImpl::compare_generate_labels(const std::string &a,
                                        const std::string &b) {
-    /* Compare two generate labels for equality ignoring any suffixed index. */
-    std::size_t a_idx = a.rfind(GEN_IDX_SEP_LHS);
-    std::size_t b_idx = b.rfind(GEN_IDX_SEP_LHS);
-    return compare_names(a.substr(0, a_idx), b.substr(0, b_idx));
+    /* Compare two generate labels for equality ignoring any suffixed index:
+     * "label(i)", or "label__i" (Aldec), which VhdlName does not see as an
+     * index. */
+    const std::string sep = GEN_IDX_SEP_LHS;
+    if (sep == "(") return vhdl_same_identifier(a, b);
+    return vhdl_same_identifier(a.substr(0, a.rfind(sep)),
+                                b.substr(0, b.rfind(sep)));
 }
 
 // Loaded by GPI via GPI_IMPL.

@@ -25,7 +25,7 @@ static const bool vhdl_names = false;
 #endif
 
 std::string VpiImpl::canonical_name(const std::string &name) {
-    return vhdl_names ? vhdl_canonical_name(name) : name;
+    return vhdl_names ? vhdl_path_key(name) : name;
 }
 
 static bool names_equal(const std::string &a, const std::string &b) {
@@ -461,7 +461,7 @@ static GpiObjHdl *find_child_by_exact_name(GpiImplInterface *impl,
         void *raw_hdl = NULL;
         switch (iter.next_handle(child_name, &child, &raw_hdl)) {
             case GpiIterator::NATIVE:
-                if (child_name == name) return child;
+                if (names_equal(child_name, name)) return child;
                 delete child;
                 break;
             case GpiIterator::NOT_NATIVE_NO_NAME:
@@ -487,7 +487,7 @@ GpiObjHdl *VpiImpl::get_child_by_name(const std::string &name,
 
     /* GHDL matches VHDL extended identifiers case insensitively and may
      * return an object whose name differs in case. */
-    if (vhdl_names && new_hdl != NULL && vhdl_is_extended_identifier(name)) {
+    if (vhdl_names && new_hdl != NULL && vhdl_is_extended(name)) {
         const char *found_name = vpi_get_str(vpiName, new_hdl);
         if (vhdl_extended_name_differs(found_name, name)) {
             LOG_DEBUG("VPI: %s matched %s, searching for an exact match",
