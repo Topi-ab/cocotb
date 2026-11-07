@@ -303,9 +303,9 @@ and are only found in exactly their case.
 
 .. code-block:: python
 
-    assert dut.data_in is dut.DATA_IN  # VHDL basic identifier
-    assert dut["\\Foo\\"] is not dut["\\foo\\"]  # VHDL extended identifiers
-    assert dut.foo is not dut.FOO  # Verilog
+    # VHDL: signal data_in : std_logic_vector(7 downto 0);
+    value = dut.data_in.value.to_unsigned()
+    dut.Data_In.value = value + 1  # the same signal
 
 
 .. _writing_tbs_accessing_verilog_packages:
