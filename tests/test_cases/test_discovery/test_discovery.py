@@ -151,6 +151,22 @@ async def recursive_discover(dut):
     _discover(dut)
 
 
+@cocotb.test()
+async def name_lookup_and_iteration_agree(dut):
+    """Looking up a child by name and finding it by iteration give the same handle."""
+    names = ["stream_in_data"]
+    if LANGUAGE == "vhdl":
+        names.append("isample_module1")  # component instance
+
+    iterated = {
+        thing.get_name_string().lower(): thing
+        for thing in dut._handle.iterate(cocotb.simulator.OBJECTS)
+    }
+    for name in names:
+        assert name in iterated
+        assert dut._handle.get_handle_by_name(name) == iterated[name], name
+
+
 class ScopeMissingError(Exception):
     pass
 
