@@ -459,6 +459,14 @@ GpiObjHdl *VhpiImpl::create_gpi_obj_from_handle(vhpiHandleT new_hdl,
                 }
             }
 
+            /* A generate pseudo-region borrows the handle of its parent, and
+             * is told apart from the parent by its name. This fails when the
+             * generate label is the same VHDL name as the parent (e.g. a
+             * for-generate "u" in the architecture of instance "u", in any
+             * case): the pseudo-region is then taken for the parent region
+             * and cannot be indexed. FliImpl and VpiImpl (GHDL) decide in the
+             * same way. Fixing this needs the callers that borrow the parent
+             * handle to say so explicitly. */
             if (!compare_names(name, hdl_name)) {
                 LOG_DEBUG("VHPI: Found pseudo-region %s", fq_name.c_str());
                 gpi_type = GPI_GENARRAY;

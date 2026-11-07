@@ -61,6 +61,7 @@ architecture rtl of vhdl_handle_identity is
     signal First_Other : std_logic;
 begin
     Mixed_Case    <= data_in(1);
+    First_Other   <= data_in(3);
     rec_sig.field_a <= data_in(2);
     rec_sig.field_b <= data_in(7 downto 4);
 

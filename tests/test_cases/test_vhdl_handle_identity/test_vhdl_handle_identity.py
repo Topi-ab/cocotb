@@ -123,10 +123,13 @@ async def handle_identity_survives_discovery(dut: Any) -> None:
 
     for path, handle in before.items():
         assert resolve(dut, path) is handle, f"{path} changed identity"
-    assert any(child is first_other for child in dut)
+    # the simulator's iteration of the toplevel, not the cache of the lookups
+    iterated = list(dut._handle.iterate(cocotb.simulator.OBJECTS))
+    assert first_other._handle in iterated
     assert dut.first_other is first_other
     # GHDL is unable to access signals in generate loops (gh-2594)
     if not IS_GHDL:
+        assert gen_b._handle in iterated
         # iterations are only found if their names match the other spelling
         assert sum(1 for _ in gen_b) == 2
 
