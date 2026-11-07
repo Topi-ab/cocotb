@@ -151,6 +151,47 @@ async def recursive_discover(dut):
     _discover(dut)
 
 
+@cocotb.test()
+async def name_lookup_and_iteration_agree(dut):
+    """Looking up a child by name and finding it by iteration give the same handle."""
+    names = ["stream_in_data"]
+    if LANGUAGE == "vhdl":
+        names.append("isample_module1")  # component instance
+
+    iterated = {
+        thing.get_name_string().lower(): thing
+        for thing in dut._handle.iterate(cocotb.simulator.OBJECTS)
+    }
+    for name in names:
+        assert name in iterated
+        assert dut._handle.get_handle_by_name(name) == iterated[name], name
+
+
+@cocotb.test(skip=LANGUAGE in ["verilog"])
+async def name_lookup_case_insensitive(dut):
+    """VHDL is case insensitive: a lookup with a different case gives the same handle."""
+    iterated = {
+        thing.get_name_string().lower(): thing
+        for thing in dut._handle.iterate(cocotb.simulator.OBJECTS)
+    }
+    by_name = dut._handle.get_handle_by_name("STREAM_IN_DATA")
+    assert by_name is not None
+    assert by_name == iterated["stream_in_data"]
+
+
+@cocotb.test()
+async def discovery_keeps_handle_identity(dut):
+    """A child looked up by name before discovery is the same object afterwards."""
+
+    # start from an undiscovered parent with an empty cache
+    dut._sub_handles = {}
+    dut._discovered = False
+
+    sig = dut.stream_in_data
+    list(dut)  # discover all children
+    assert dut.stream_in_data is sig
+
+
 class ScopeMissingError(Exception):
     pass
 
