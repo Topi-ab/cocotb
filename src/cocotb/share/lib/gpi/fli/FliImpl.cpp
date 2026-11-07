@@ -89,7 +89,8 @@ bool FliImpl::isTypeSignal(int type, int full_type) {
 GpiObjHdl *FliImpl::create_gpi_obj_from_handle(void *hdl,
                                                const std::string &name,
                                                const std::string &fq_name,
-                                               int accType, int accFullType) {
+                                               int accType, int accFullType,
+                                               GpiObjHdl *parent) {
     GpiObjHdl *new_obj = NULL;
 
     LOG_DEBUG(
@@ -106,7 +107,11 @@ GpiObjHdl *FliImpl::create_gpi_obj_from_handle(void *hdl,
          */
         std::string rgn_name =
             mti_GetRegionName(static_cast<mtiRegionIdT>(hdl));
-        if (!vhdl_names_equal(name, rgn_name)) {
+        // Below another implementation's scope, the name is a Verilog label.
+        bool same_name = (parent && !parent->is_this_impl(this))
+                             ? name == rgn_name
+                             : vhdl_names_equal(name, rgn_name);
+        if (!same_name) {
             LOG_DEBUG("Found pseudo-region %s -> %p", fq_name.c_str(), hdl);
             new_obj =
                 new FliObjHdl(this, hdl, GPI_GENARRAY, accType, accFullType);
@@ -215,6 +220,15 @@ GpiObjHdl *FliImpl::create_gpi_obj_from_handle(void *hdl,
         return NULL;
     }
 
+    /* The handle store keeps objects under a key that is the same however the
+     * object was reached: VHDL names in canonical form. The name of a child of
+     * another implementation's scope (a Verilog instance label in a
+     * mixed-language design) is case sensitive and kept as it is. */
+    new_obj->set_key(parent ? vhdl_child_key(parent->get_key(),
+                                             parent->get_fullname(), fq_name,
+                                             parent->is_this_impl(this))
+                            : vhdl_canonical_component(fq_name));
+
     return new_obj;
 }
 
@@ -222,6 +236,7 @@ GpiObjHdl *FliImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
     LOG_DEBUG("Trying to convert a raw handle to an FLI Handle.");
 
     const char *c_name = acc_fetch_name(raw_hdl);
+    const char *c_fullname = acc_fetch_fullname(raw_hdl);
 
     if (!c_name) {
         LOG_DEBUG("Unable to query the name of the raw handle.");
@@ -229,25 +244,26 @@ GpiObjHdl *FliImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
     }
 
     std::string name = c_name;
-    /* The same full name as get_child_by_name() gives the object. The parent's
-     * full name is kept as it is, as it may belong to a Verilog scope
-     * (mixed-language design), whose names are case sensitive. */
-    std::string fq_name = parent->get_fullname();
-    if (fq_name != "/") fq_name += "/";
-    fq_name += vhdl_canonical_name(name);
+    /* The key is built as get_child_by_name() builds it for a module parent,
+     * so that both give the object the same key. */
+    std::string by_name = parent->get_fullname();
+    if (by_name != "/") by_name += "/";
+    by_name += name;
+    std::string fq_name = c_fullname ? c_fullname : by_name;
 
     PLI_INT32 accType = acc_fetch_type(raw_hdl);
     PLI_INT32 accFullType = acc_fetch_fulltype(raw_hdl);
 
-    return create_gpi_obj_from_handle(raw_hdl, name, fq_name, accType,
-                                      accFullType);
+    GpiObjHdl *new_obj = create_gpi_obj_from_handle(
+        raw_hdl, name, fq_name, accType, accFullType, parent);
+    if (new_obj) {
+        new_obj->set_key(vhdl_child_key(parent->get_key(),
+                                        parent->get_fullname(), by_name,
+                                        parent->is_this_impl(this)));
+    }
+    return new_obj;
 }
 
-/**
- * @name    Get Child By Name
- * @brief   Attempt to get child handle by name with FLI and create
- *          a handle if it exists
- */
 /* Find the child of *parent* whose name is exactly *name* by iterating
  * *parent*. A parent from another implementation cannot be iterated here, so
  * nothing is found then. */
@@ -273,33 +289,34 @@ static GpiObjHdl *find_child_by_exact_name(GpiImplInterface *impl,
     }
 }
 
+/**
+ * @name    Get Child By Name
+ * @brief   Attempt to get child handle by name with FLI and create
+ *          a handle if it exists
+ */
 GpiObjHdl *FliImpl::get_child_by_name(const std::string &name,
                                       GpiObjHdl *parent) {
     bool search_rgn = false;
     bool search_sig = false;
     bool search_var = false;
 
-    /* The handle store identifies objects by their full name, so it must be
-     * the same however the object was reached: the VHDL name is added in
-     * canonical form. */
     std::string fq_name = parent->get_fullname();
-    std::string vhdl_name = vhdl_canonical_name(name);
     gpi_objtype obj_type = parent->get_type();
 
     if (fq_name == "/") {
-        fq_name += vhdl_name;
+        fq_name += name;
         search_rgn = true;
         search_sig = true;
         search_var = true;
     } else if (obj_type == GPI_MODULE) {
-        fq_name += "/" + vhdl_name;
+        fq_name += "/" + name;
         search_rgn = true;
         search_sig = true;
         search_var = true;
     } else if (obj_type == GPI_STRUCTURE) {
         FliValueObjHdl *fli_obj = reinterpret_cast<FliValueObjHdl *>(parent);
 
-        fq_name += "." + vhdl_name;
+        fq_name += "." + name;
         search_rgn = false;
         search_var = fli_obj->is_variable();
         search_sig = !search_var;
@@ -320,24 +337,44 @@ GpiObjHdl *FliImpl::get_child_by_name(const std::string &name,
     HANDLE hdl = NULL;
     PLI_INT32 accType;
     PLI_INT32 accFullType;
-    const char *found_name = NULL;
+    /* Name of the object found, to check an extended identifier. */
+    bool check_name = vhdl_is_extended_identifier(name);
+    std::string found_name;
 
     if (search_rgn && (hdl = mti_FindRegion(&writable[0])) != NULL) {
-        found_name = mti_GetRegionName(static_cast<mtiRegionIdT>(hdl));
+        const char *c_found =
+            check_name ? mti_GetRegionName(static_cast<mtiRegionIdT>(hdl))
+                       : NULL;
+        if (c_found) found_name = c_found;
         accType = acc_fetch_type(hdl);
         accFullType = acc_fetch_fulltype(hdl);
         LOG_DEBUG("Found region %s -> %p", fq_name.c_str(), hdl);
         LOG_DEBUG("        Type: %d", accType);
         LOG_DEBUG("   Full Type: %d", accFullType);
     } else if (search_sig && (hdl = mti_FindSignal(&writable[0])) != NULL) {
-        found_name = mti_GetSignalName(static_cast<mtiSignalIdT>(hdl));
+        if (check_name && obj_type == GPI_STRUCTURE) {
+            // A record element, named as the iterator names it.
+            char *c_found = mti_GetSignalNameIndirect(
+                static_cast<mtiSignalIdT>(hdl), NULL, 0);
+            if (c_found) {
+                found_name = c_found;
+                mti_VsimFree(c_found);
+            }
+        } else if (check_name) {
+            const char *c_found =
+                mti_GetSignalName(static_cast<mtiSignalIdT>(hdl));
+            if (c_found) found_name = c_found;
+        }
         accType = acc_fetch_type(hdl);
         accFullType = acc_fetch_fulltype(hdl);
         LOG_DEBUG("Found a signal %s -> %p", fq_name.c_str(), hdl);
         LOG_DEBUG("        Type: %d", accType);
         LOG_DEBUG("   Full Type: %d", accFullType);
     } else if (search_var && (hdl = mti_FindVar(&writable[0])) != NULL) {
-        found_name = mti_GetVarName(static_cast<mtiVariableIdT>(hdl));
+        const char *c_found =
+            check_name ? mti_GetVarName(static_cast<mtiVariableIdT>(hdl))
+                       : NULL;
+        if (c_found) found_name = c_found;
         accFullType = accType =
             mti_GetVarKind(static_cast<mtiVariableIdT>(hdl));
         LOG_DEBUG("Found a variable %s -> %p", fq_name.c_str(), hdl);
@@ -363,7 +400,8 @@ GpiObjHdl *FliImpl::get_child_by_name(const std::string &name,
                     FliObj *fli_obj = dynamic_cast<FliObj *>(parent);
                     return create_gpi_obj_from_handle(
                         parent->get_handle<HANDLE>(), name, fq_name,
-                        fli_obj->get_acc_type(), fli_obj->get_acc_full_type());
+                        fli_obj->get_acc_type(), fli_obj->get_acc_full_type(),
+                        parent);
                 }
             }
         }
@@ -376,10 +414,9 @@ GpiObjHdl *FliImpl::get_child_by_name(const std::string &name,
 
     /* The simulator may also match extended identifiers case insensitively
      * and return an object whose name differs in case. */
-    if (vhdl_is_extended_identifier(name) &&
-        (!found_name || !vhdl_extended_name_matches(found_name, name))) {
+    if (check_name && vhdl_extended_name_differs(found_name.c_str(), name)) {
         LOG_DEBUG("FLI: %s matched %s, searching for an exact match",
-                  fq_name.c_str(), found_name ? found_name : "(null)");
+                  fq_name.c_str(), found_name.c_str());
         return find_child_by_exact_name(this, name, parent);
     }
 
@@ -395,10 +432,11 @@ GpiObjHdl *FliImpl::get_child_by_name(const std::string &name,
         FliObj *fli_obj = dynamic_cast<FliObj *>(parent);
         return create_gpi_obj_from_handle(parent->get_handle<HANDLE>(), name,
                                           fq_name, fli_obj->get_acc_type(),
-                                          fli_obj->get_acc_full_type());
+                                          fli_obj->get_acc_full_type(), parent);
     }
 
-    return create_gpi_obj_from_handle(hdl, name, fq_name, accType, accFullType);
+    return create_gpi_obj_from_handle(hdl, name, fq_name, accType, accFullType,
+                                      parent);
 }
 
 /**
@@ -439,7 +477,7 @@ GpiObjHdl *FliImpl::get_child_by_index(int32_t index, GpiObjHdl *parent) {
         }
 
         return create_gpi_obj_from_handle(hdl, name, fq_name, accType,
-                                          accFullType);
+                                          accFullType, parent);
     } else if (obj_type == GPI_LOGIC || obj_type == GPI_LOGIC_ARRAY ||
                obj_type == GPI_ARRAY || obj_type == GPI_FIXED_STRING) {
         FliValueObjHdl *fli_obj = reinterpret_cast<FliValueObjHdl *>(parent);
@@ -472,7 +510,7 @@ GpiObjHdl *FliImpl::get_child_by_index(int32_t index, GpiObjHdl *parent) {
             LOG_DEBUG("   Full Type: %d", accFullType);
         }
         return create_gpi_obj_from_handle(hdl, name, fq_name, accType,
-                                          accFullType);
+                                          accFullType, parent);
     } else {
         LOG_ERROR(
             "FLI: Parent of type %d must be of type GPI_GENARRAY, "
@@ -615,7 +653,7 @@ GpiObjHdl *FliImpl::get_root_handle(const char *name) {
     rgn_fullname = mti_GetRegionFullName(root);
 
     root_name = rgn_name;
-    root_fullname = vhdl_canonical_name(rgn_fullname);
+    root_fullname = rgn_fullname;
     mti_VsimFree(rgn_fullname);
 
     LOG_DEBUG("Found toplevel: %s, creating handle....", root_name.c_str());
@@ -1039,11 +1077,9 @@ GpiIterator::Status FliIterator::next_handle(std::string &name, GpiObjHdl **hdl,
         mti_VsimFree(c_name);
     }
 
-    /* VHDL names are added to the full name in canonical form, in the same way
-     * as FliImpl::get_child_by_name() does. */
     std::string fq_name = m_parent->get_fullname();
     if (fq_name == "/") {
-        fq_name += vhdl_canonical_name(name);
+        fq_name += name;
     } else if (*one2many == FliIterator::OTM_SIGNAL_SUB_ELEMENTS ||
                *one2many == FliIterator::OTM_VARIABLE_SUB_ELEMENTS ||
                obj_type == GPI_GENARRAY) {
@@ -1056,21 +1092,21 @@ GpiIterator::Status FliIterator::next_handle(std::string &name, GpiObjHdl **hdl,
         }
 
         if (found != std::string::npos) {
-            fq_name += vhdl_canonical_name(name.substr(found));
+            fq_name += name.substr(found);
             if (obj_type != GPI_GENARRAY) {
                 name = name.substr(found + 1);
             }
         } else {
             LOG_WARN("Unhandled Sub-Element Format - %s", name.c_str());
-            fq_name += "/" + vhdl_canonical_name(name);
+            fq_name += "/" + name;
         }
     } else {
-        fq_name += "/" + vhdl_canonical_name(name);
+        fq_name += "/" + name;
     }
 
     FliImpl *fli_impl = reinterpret_cast<FliImpl *>(m_impl);
     new_obj = fli_impl->create_gpi_obj_from_handle(obj, name, fq_name, accType,
-                                                   accFullType);
+                                                   accFullType, m_parent);
     if (new_obj) {
         *hdl = new_obj;
         return GpiIterator::NATIVE;

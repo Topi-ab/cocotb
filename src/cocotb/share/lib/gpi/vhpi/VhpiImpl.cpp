@@ -304,7 +304,8 @@ static bool compare_names(const std::string &a, const std::string &b) {
 GpiObjHdl *VhpiImpl::create_gpi_obj_from_handle(vhpiHandleT new_hdl,
                                                 const std::string &name,
                                                 const std::string &fq_name,
-                                                bool owns_handle) {
+                                                bool owns_handle,
+                                                GpiObjHdl *parent) {
     vhpiIntT type;
     gpi_objtype gpi_type;
     GpiObjHdl *new_obj = NULL;
@@ -529,6 +530,15 @@ GpiObjHdl *VhpiImpl::create_gpi_obj_from_handle(vhpiHandleT new_hdl,
         new_obj->set_owns_handle(false);
         delete new_obj;
         new_obj = NULL;
+    } else {
+        /* The handle store keeps objects under a key that is the same however
+           the object was reached: VHDL names in canonical form. The name of a
+           child of another implementation's scope (a Verilog instance label
+           in a mixed-language design) is case sensitive and kept as it is. */
+        new_obj->set_key(
+            parent ? vhdl_child_key(parent->get_key(), parent->get_fullname(),
+                                    fq_name, parent->is_this_impl(this))
+                   : vhdl_canonical_component(fq_name));
     }
 
 out:
@@ -537,17 +547,13 @@ out:
     return new_obj;
 }
 
-/* The handle store identifies objects by their full name, so it must be the
- * same however the object was reached: VHDL names are added in canonical
- * form. The parent's full name is kept as it is, as it may belong to a
- * Verilog scope (mixed-language design), whose names are case sensitive. */
 static std::string fully_qualified_name(const std::string &name,
                                         GpiObjHdl *parent) {
     std::string fq_name = parent->get_fullname();
     if (fq_name == ":") {
-        fq_name += vhdl_canonical_name(name);
+        fq_name += name;
     } else {
-        fq_name += "." + vhdl_canonical_name(name);
+        fq_name += "." + name;
     }
     return fq_name;
 }
@@ -566,7 +572,8 @@ GpiObjHdl *VhpiImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
     std::string name = c_name;
     std::string fq_name = fully_qualified_name(name, parent);
 
-    GpiObjHdl *new_obj = create_gpi_obj_from_handle(new_hdl, name, fq_name);
+    GpiObjHdl *new_obj =
+        create_gpi_obj_from_handle(new_hdl, name, fq_name, true, parent);
     if (new_obj == NULL) {
         vhpi_release_handle(new_hdl);
         LOG_DEBUG("VHPI: Unable to fetch object %s", fq_name.c_str());
@@ -621,7 +628,7 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
      * may return an object whose name differs in case. */
     if (new_hdl != NULL && vhdl_is_extended_identifier(name)) {
         const char *found_name = vhpi_get_str(vhpiCaseNameP, new_hdl);
-        if (!found_name || !vhdl_extended_name_matches(found_name, name)) {
+        if (vhdl_extended_name_differs(found_name, name)) {
             LOG_DEBUG("VHPI: %s matched %s, searching for an exact match",
                       fq_name.c_str(), found_name ? found_name : "(null)");
             vhpi_release_handle(new_hdl);
@@ -629,7 +636,11 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
         }
     }
 
-    if (new_hdl == NULL && parent->get_type() == GPI_STRUCTURE) {
+    /* The fallbacks below need a VHPI handle of the parent. */
+    bool native_parent = parent->is_this_impl(this);
+
+    if (new_hdl == NULL && native_parent &&
+        parent->get_type() == GPI_STRUCTURE) {
         /* vhpi_handle_by_name() doesn't always work for records, specifically
          * records in generics */
         vhpiHandleT iter = vhpi_iterator(vhpiSelectedNames, vhpi_hdl);
@@ -650,7 +661,7 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
                 vhpi_release_handle(new_hdl);
             }
         }
-    } else if (new_hdl == NULL) {
+    } else if (new_hdl == NULL && native_parent) {
         /* If not found, check to see if the name of a generate loop */
         vhpiHandleT iter = vhpi_iterator(vhpiInternalRegions, vhpi_hdl);
 
@@ -694,12 +705,16 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
     if (owns_handle && vhpi_get(vhpiKindP, new_hdl) == vhpiForGenerateK) {
         vhpi_release_handle(new_hdl);
 
+        if (!native_parent) {
+            // The parent's handle is not a VHPI handle.
+            return NULL;
+        }
         new_hdl = vhpi_hdl;
         owns_handle = false;
     }
 
     GpiObjHdl *new_obj =
-        create_gpi_obj_from_handle(new_hdl, name, fq_name, owns_handle);
+        create_gpi_obj_from_handle(new_hdl, name, fq_name, owns_handle, parent);
     if (new_obj == NULL) {
         if (owns_handle) vhpi_release_handle(new_hdl);
         LOG_DEBUG("VHPI: Unable to fetch object %s", fq_name.c_str());
@@ -968,7 +983,7 @@ GpiObjHdl *VhpiImpl::get_child_by_index(int32_t index, GpiObjHdl *parent) {
     }
 
     GpiObjHdl *new_obj =
-        create_gpi_obj_from_handle(new_hdl, name, fq_name, owns_handle);
+        create_gpi_obj_from_handle(new_hdl, name, fq_name, owns_handle, parent);
     if (new_obj == NULL) {
         if (owns_handle) vhpi_release_handle(new_hdl);
         LOG_DEBUG(
@@ -1001,8 +1016,7 @@ GpiObjHdl *VhpiImpl::get_root_handle(const char *name) {
             "fallbacks",
             root_name.c_str(), name);
     } else {
-        return create_gpi_obj_from_handle(root, root_name,
-                                          vhdl_canonical_name(root_name));
+        return create_gpi_obj_from_handle(root, root_name, root_name);
     }
 
     // Some simulators do not return the correct entity name for rootInst,
@@ -1040,8 +1054,7 @@ GpiObjHdl *VhpiImpl::get_root_handle(const char *name) {
                 "'%s'. Trying handle lookup by name",
                 root_name.c_str(), name);
         } else {
-            return create_gpi_obj_from_handle(root, root_name,
-                                              vhdl_canonical_name(root_name));
+            return create_gpi_obj_from_handle(root, root_name, root_name);
         }
     }
 
@@ -1080,8 +1093,7 @@ GpiObjHdl *VhpiImpl::get_root_handle(const char *name) {
                 dut_kind_str.c_str(), dut_kind, root_name.c_str(), name);
             vhpi_release_handle(dut);
         } else {
-            return create_gpi_obj_from_handle(dut, root_name,
-                                              vhdl_canonical_name(root_name));
+            return create_gpi_obj_from_handle(dut, root_name, root_name);
         }
     }
 

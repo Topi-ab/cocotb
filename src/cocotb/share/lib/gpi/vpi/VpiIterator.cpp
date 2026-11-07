@@ -216,8 +216,9 @@ GpiIterator::Status VpiRootIterator::next_handle(std::string &, GpiObjHdl **hdl,
         LOG_DEBUG("vpi_root_iterator: root found '%s'", root_name.c_str());
 
         GpiObjHdl *new_obj = new VpiObjHdl(vpi_impl, root, gpi_module);
-        // Same full name as VpiImpl::get_root_handle() gives the root.
-        new_obj->initialise(root_name, VpiImpl::canonical_name(root_name));
+        new_obj->initialise(root_name, root_name);
+        // Same key as VpiImpl::get_root_handle() gives the root.
+        new_obj->set_key(VpiImpl::canonical_name(root_name));
         *hdl = new_obj;
 
         return GpiIterator::NATIVE;

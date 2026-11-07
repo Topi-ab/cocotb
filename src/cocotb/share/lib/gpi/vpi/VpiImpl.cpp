@@ -411,9 +411,10 @@ GpiObjHdl *VpiImpl::create_gpi_obj_from_handle(vpiHandle new_hdl,
             return NULL;
     }
 
-    /* The handle store identifies objects by their full name, so it must be
-       the same however the object was reached. */
-    new_obj->initialise(resolved_name, canonical_name(resolved_fq_name));
+    new_obj->initialise(resolved_name, resolved_fq_name);
+    /* The handle store keeps objects under a key that is the same however the
+       object was reached. */
+    if (vhdl_names) new_obj->set_key(canonical_name(resolved_fq_name));
     new_obj->set_is_resolved_reference(resolved_hdl != NULL);
 
     LOG_DEBUG("VPI: Created GPI object from type %s(%d)",
@@ -488,7 +489,7 @@ GpiObjHdl *VpiImpl::get_child_by_name(const std::string &name,
      * return an object whose name differs in case. */
     if (vhdl_names && new_hdl != NULL && vhdl_is_extended_identifier(name)) {
         const char *found_name = vpi_get_str(vpiName, new_hdl);
-        if (!found_name || !vhdl_extended_name_matches(found_name, name)) {
+        if (vhdl_extended_name_differs(found_name, name)) {
             LOG_DEBUG("VPI: %s matched %s, searching for an exact match",
                       fq_name.c_str(), found_name ? found_name : "(null)");
             vpi_free_object(new_hdl);
@@ -780,8 +781,8 @@ GpiObjHdl *VpiImpl::get_root_handle(const char *name) {
         // prevents finding virtual classes (which Xcelium puts at the top-level
         // scope) when looking for objects with get_root_handle.
         const char *obj_name = vpi_get_str(vpiFullName, root);
-        if (obj_name && ((!name && obj_name[0] != '\\') ||
-                         (name && names_equal(name, obj_name))))
+        if ((!name && obj_name[0] != '\\') ||
+            (name && names_equal(name, obj_name)))
             break;
         vpi_free_object(root);
     }
@@ -799,7 +800,8 @@ GpiObjHdl *VpiImpl::get_root_handle(const char *name) {
 
     root_name = vpi_get_str(vpiFullName, root);
     rv = new VpiObjHdl(this, root, to_gpi_objtype(vpi_get(vpiType, root)));
-    rv->initialise(root_name, canonical_name(root_name));
+    rv->initialise(root_name, root_name);
+    if (vhdl_names) rv->set_key(canonical_name(root_name));
 
     return rv;
 

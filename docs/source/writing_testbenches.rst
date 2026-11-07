@@ -300,6 +300,7 @@ VHDL basic identifiers are case insensitive,
 so every spelling of a name gives the same object.
 VHDL extended identifiers and all Verilog names are case sensitive
 and are only found in exactly their case.
+Iterating a parent can list an object once for each spelling it has been accessed with.
 
 .. code-block:: python
 
@@ -309,8 +310,9 @@ and are only found in exactly their case.
 
 .. note::
 
-    With NVC and GHDL, objects below VHDL extended identifiers that differ only in case
-    can refer to the same simulator object,
+    With simulators that match extended identifiers regardless of case, such as NVC and GHDL,
+    objects below VHDL extended identifiers that differ only in case
+    can refer to the same simulator object, so one of them gives the wrong object,
     for example ``dut["\\Blk\\"].s`` and ``dut["\\blk\\"].s``.
 
 .. versionchanged:: 2.2

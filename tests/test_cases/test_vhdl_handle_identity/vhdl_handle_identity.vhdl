@@ -4,7 +4,7 @@
 
 -- Objects reachable through every way the VHDL implementations build a full
 -- name: ports and signals, a component instance, a generate block and a record.
--- Basic identifiers are written in mixed case on purpose; the two extended
+-- Basic identifiers are written in mixed case on purpose; the extended
 -- identifiers differ only in case and are distinct objects.
 
 library ieee;
@@ -57,6 +57,10 @@ architecture rtl of vhdl_handle_identity is
     signal rec_sig    : rec_t;
     signal \Ext_Sig\  : std_logic := '0';
     signal \ext_sig\  : std_logic := '0';
+    -- extended identifiers with a backslash (written twice) in them
+    signal \Back\\Slash\ : std_logic := '0';
+    signal \back\\slash\ : std_logic := '0';
+    signal \Back\\slash\ : std_logic := '0';  -- differs only after the backslash
     -- only looked up in other spellings than the source one
     signal First_Other : std_logic;
 begin
@@ -69,6 +73,13 @@ begin
         port map (
             a => data_in(0),
             y => q
+        );
+
+    -- only looked up in other spellings than the source one
+    u_other : component vhdl_handle_identity_sub
+        port map (
+            a => data_in(1),
+            y => open
         );
 
     gen : for i in 0 to 1 generate

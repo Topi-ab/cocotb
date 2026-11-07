@@ -13,6 +13,10 @@ const char *GpiObjHdl::get_fullname_str() { return m_fullname.c_str(); }
 
 const std::string &GpiObjHdl::get_fullname() { return m_fullname; }
 
+const std::string &GpiObjHdl::get_key() {
+    return m_key.empty() ? m_fullname : m_key;
+}
+
 const char *GpiObjHdl::get_type_str() {
 #define CASE_OPTION(_X) \
     case _X:            \

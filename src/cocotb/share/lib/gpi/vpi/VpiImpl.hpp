@@ -393,7 +393,8 @@ class VpiImpl : public GpiImplInterface {
                                           bool owns_handle = true);
 
     /* Canonical form of a full name, following the case rules of the language
-     * of the design (VHDL for GHDL, Verilog otherwise). */
+     * of the design (VHDL for GHDL, Verilog otherwise), used as the key of the
+     * handle store. */
     static std::string canonical_name(const std::string &name);
     static bool compare_generate_labels(const std::string &a,
                                         const std::string &b);

@@ -461,9 +461,12 @@ class FliImpl : public GpiImplInterface {
                                                 void *cb_data) override;
 
     /* Method to provide strings from operation types */
+    /* *parent* is the object whose full name *fq_name* was built from, NULL
+     * for a root object. */
     GpiObjHdl *create_gpi_obj_from_handle(void *hdl, const std::string &name,
                                           const std::string &fq_name,
-                                          int accType, int accFullType);
+                                          int accType, int accFullType,
+                                          GpiObjHdl *parent = NULL);
 
     static bool compare_generate_labels(const std::string &a,
                                         const std::string &b);

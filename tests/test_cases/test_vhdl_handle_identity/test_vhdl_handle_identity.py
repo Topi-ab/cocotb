@@ -17,6 +17,7 @@ before, so that they are looked up in the simulator too.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -27,11 +28,14 @@ from cocotb.triggers import Timer
 
 SIM_NAME = cocotb.SIM_NAME.lower()
 IS_GHDL = SIM_NAME.startswith("ghdl")
+IS_NVC = SIM_NAME.startswith("nvc")
+
+Spelling = tuple[str, tuple[str, ...], tuple[str, ...]]
 
 # (path as written in the source,
 #  other spellings used before iterating the design,
 #  other spellings used only after iterating the design)
-SPELLINGS = [
+SPELLINGS: list[Spelling] = [
     ("data_in", ("DATA_IN", "Data_In"), ("data_IN",)),
     ("Mixed_Case", ("mixed_case", "MIXED_CASE"), ("mIXED_cASE",)),
     ("u_sub", ("U_SUB", "U_Sub"), ("u_SUB",)),
@@ -52,6 +56,16 @@ if not IS_GHDL:
     SPELLINGS.append(
         ("gen[0].g_sig", ("GEN[0].G_SIG", "Gen[0].G_Sig"), ("gEn[0].g_SIG",))
     )
+
+
+# extended identifiers that differ only in case: (one, other)
+EXTENDED_PAIRS = [("\\Ext_Sig\\", "\\ext_sig\\")]
+# the same with a backslash (written twice) in them: \Back\\Slash\ and others
+BACKSLASH_NAMES = ["\\Back\\\\Slash\\", "\\back\\\\slash\\", "\\Back\\\\slash\\"]
+BACKSLASH_PAIRS = [
+    (BACKSLASH_NAMES[0], BACKSLASH_NAMES[1]),
+    (BACKSLASH_NAMES[0], BACKSLASH_NAMES[2]),  # differ only after the backslash
+]
 
 
 def resolve(dut: Any, path: str) -> Any:
@@ -82,7 +96,7 @@ async def root_lookup_matches_dut(dut: Any) -> None:
 
 @cocotb.test
 @cocotb.parametrize(spelling=SPELLINGS)
-async def case_lookup_before_discovery(dut: Any, spelling: Any) -> None:
+async def case_lookup_before_discovery(dut: Any, spelling: Spelling) -> None:
     """All spellings of a basic identifier give the same handle (no iteration yet)."""
     path, others, _ = spelling
     handle = resolve(dut, path)
@@ -90,25 +104,43 @@ async def case_lookup_before_discovery(dut: Any, spelling: Any) -> None:
         assert resolve(dut, other) is handle, f"{other} is not {path}"
 
 
+async def check_distinct(dut: Any, pairs: list[tuple[str, str]]) -> None:
+    for one_name, other_name in pairs:
+        one = dut[one_name]
+        other = dut[other_name]
+        assert one is not other, one_name
+
+        one.value = 1
+        other.value = 0
+        await Timer(1, "ns")
+        assert one.value == 1, one_name
+        assert other.value == 0, other_name
+
+
 @cocotb.test
 async def extended_identifiers_stay_distinct(dut: Any) -> None:
     """Extended identifiers are case sensitive: \\Ext_Sig\\ and \\ext_sig\\ differ."""
-    upper = dut["\\Ext_Sig\\"]
-    lower = dut["\\ext_sig\\"]
-    assert upper is not lower
+    await check_distinct(dut, EXTENDED_PAIRS)
 
-    upper.value = 1
-    lower.value = 0
-    await Timer(1, "ns")
-    assert upper.value == 1
-    assert lower.value == 0
+
+@cocotb.xfail(
+    IS_NVC,
+    raises=KeyError,
+    reason="NVC does not find extended identifiers with a backslash in them "
+    "by their source form",
+)
+@cocotb.test
+async def extended_identifiers_with_backslash_stay_distinct(dut: Any) -> None:
+    """The same with a backslash (written twice) in the extended identifiers."""
+    await check_distinct(dut, BACKSLASH_PAIRS)
 
 
 @cocotb.test
 async def extended_identifier_other_case_not_found(dut: Any) -> None:
     """An extended identifier in a case that does not exist is not found."""
-    with pytest.raises(KeyError):
-        dut["\\EXT_SIG\\"]
+    for name in ("\\EXT_SIG\\", "\\BACK\\\\SLASH\\", "\\Back\\\\SLASH\\"):
+        with pytest.raises(KeyError):
+            dut[name]
 
 
 @cocotb.test
@@ -118,6 +150,15 @@ async def handle_identity_survives_discovery(dut: Any) -> None:
     # first looked up in a spelling that differs from the source
     first_other = dut.FIRST_OTHER
     gen_b = dut.GEN_B
+    u_other = dut.U_OTHER
+    # an instance, not a generate pseudo-region
+    assert isinstance(u_other, HierarchyObject)
+    u_other_sig = u_other.SUB_SIG
+    assert u_other.sub_sig is u_other_sig
+    # GHDL is unable to access signals in generate loops (gh-2594)
+    gen_b_1 = None if IS_GHDL else dut.GEN_B[1]
+    if gen_b_1 is not None:
+        assert gen_b_1.G_SIG is gen_b_1.g_sig
 
     discover_all(dut)
 
@@ -126,7 +167,11 @@ async def handle_identity_survives_discovery(dut: Any) -> None:
     # the simulator's iteration of the toplevel, not the cache of the lookups
     iterated = list(dut._handle.iterate(cocotb.simulator.OBJECTS))
     assert first_other._handle in iterated
+    assert u_other._handle in iterated
     assert dut.first_other is first_other
+    assert dut.u_other.sub_sig is u_other_sig
+    if gen_b_1 is not None:
+        assert dut.gen_b[1] is gen_b_1
     # GHDL is unable to access signals in generate loops (gh-2594)
     if not IS_GHDL:
         assert gen_b._handle in iterated
@@ -136,7 +181,7 @@ async def handle_identity_survives_discovery(dut: Any) -> None:
 
 @cocotb.test
 @cocotb.parametrize(spelling=SPELLINGS)
-async def case_lookup_after_discovery(dut: Any, spelling: Any) -> None:
+async def case_lookup_after_discovery(dut: Any, spelling: Spelling) -> None:
     """All spellings of a basic identifier give the same handle after iteration."""
     discover_all(dut)
     path, others, fresh = spelling
@@ -154,6 +199,22 @@ async def iterated_children_match_lookup(dut: Any) -> None:
         parents.append(dut.rec_sig)
     for parent in parents:
         for child in parent:
+            # objects that some simulators add to iteration cannot be looked up
+            # by name: "#IMPLICIT#" and "s__218_3" (Questa QIS flow, QSIM-84124)
+            if child._name.startswith("#") or re.fullmatch(r"s__\d+_\d+", child._name):
+                continue
             # ask the simulator, not the cache that the iteration has filled
             found = parent._handle.get_handle_by_name(child._name)
             assert found == child._handle, child._path
+
+
+@cocotb.test
+async def iterated_extended_identifiers_stay_distinct(dut: Any) -> None:
+    """Iteration gives one object per extended identifier, however it is reported."""
+    found = [
+        handle
+        for handle in dut._handle.iterate(cocotb.simulator.OBJECTS)
+        if "slash" in handle.get_name_string().lower()
+    ]
+    assert len(found) == len(BACKSLASH_NAMES)
+    assert len(set(found)) == len(BACKSLASH_NAMES)

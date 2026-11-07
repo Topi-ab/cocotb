@@ -98,6 +98,15 @@ class GPI_EXPORT GpiObjHdl : public GpiHdl {
     const std::string &get_name();
     const std::string &get_fullname();
 
+    /** Key under which the handle store keeps the object.
+     *
+     * The full name depends on the spelling used to reach the object. The key
+     * must be the same however the object was reached, e.g. with VHDL basic
+     * identifiers in canonical form. It is the full name unless set.
+     */
+    const std::string &get_key();
+    void set_key(const std::string &key) { m_key = key; }
+
     virtual const char *get_definition_name() {
         return m_definition_name.c_str();
     };
@@ -132,6 +141,7 @@ class GPI_EXPORT GpiObjHdl : public GpiHdl {
     gpi_range_dir m_range_dir = GPI_RANGE_NO_DIR;
     std::string m_name = "unknown";
     std::string m_fullname = "unknown";
+    std::string m_key;
 
     std::string m_definition_name;
     std::string m_definition_file;
