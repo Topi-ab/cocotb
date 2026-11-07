@@ -1,0 +1,1 @@
+VHDL extended identifiers looked up by name are now only found in exactly their case with all simulators. Before, NVC and GHDL also found them in another case, e.g. ``dut["\\EXT_SIG\\"]`` gave ``\Ext_Sig\``.

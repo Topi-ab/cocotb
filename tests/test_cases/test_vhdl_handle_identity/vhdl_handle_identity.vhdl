@@ -57,6 +57,8 @@ architecture rtl of vhdl_handle_identity is
     signal rec_sig    : rec_t;
     signal \Ext_Sig\  : std_logic := '0';
     signal \ext_sig\  : std_logic := '0';
+    -- only looked up in other spellings than the source one
+    signal First_Other : std_logic;
 begin
     Mixed_Case    <= data_in(1);
     rec_sig.field_a <= data_in(2);
@@ -73,4 +75,11 @@ begin
     begin
         g_sig <= data_in(i);
     end generate gen;
+
+    -- only looked up in other spellings than the source one
+    gen_b : for i in 0 to 1 generate
+        signal g_sig : std_logic;
+    begin
+        g_sig <= data_in(i + 2);
+    end generate gen_b;
 end architecture rtl;

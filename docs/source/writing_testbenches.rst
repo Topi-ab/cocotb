@@ -305,7 +305,20 @@ and are only found in exactly their case.
 
     # VHDL: signal data_in : std_logic_vector(7 downto 0);
     value = dut.data_in.value.to_unsigned()
-    dut.Data_In.value = value + 1  # the same signal
+    dut.Data_In.value = (value + 1) % 256  # the same signal
+
+.. note::
+
+    With NVC and GHDL, objects below VHDL extended identifiers that differ only in case
+    can refer to the same simulator object,
+    for example ``dut["\\Blk\\"].s`` and ``dut["\\blk\\"].s``.
+
+.. versionchanged:: 2.2
+
+    VHDL names follow these rules with all simulators.
+    Before, a spelling that differs from the source could give a separate handle,
+    a handle of the wrong type or no object,
+    and NVC and GHDL found extended identifiers in another case.
 
 
 .. _writing_tbs_accessing_verilog_packages:

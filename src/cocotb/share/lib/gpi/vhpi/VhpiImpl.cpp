@@ -569,10 +569,12 @@ GpiObjHdl *VhpiImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
 }
 
 /* Find the child of *parent* whose name is exactly *name* by iterating
- * *parent*. */
+ * *parent*. A parent from another implementation cannot be iterated here, so
+ * nothing is found then. */
 static GpiObjHdl *find_child_by_exact_name(GpiImplInterface *impl,
                                            const std::string &name,
                                            GpiObjHdl *parent) {
+    if (!parent->is_this_impl(impl)) return NULL;
     VhpiIterator iter(impl, parent);
     while (true) {
         std::string child_name;

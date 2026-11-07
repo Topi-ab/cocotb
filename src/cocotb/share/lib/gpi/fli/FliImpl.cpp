@@ -218,11 +218,10 @@ GpiObjHdl *FliImpl::create_gpi_obj_from_handle(void *hdl,
     return new_obj;
 }
 
-GpiObjHdl *FliImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *) {
+GpiObjHdl *FliImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
     LOG_DEBUG("Trying to convert a raw handle to an FLI Handle.");
 
     const char *c_name = acc_fetch_name(raw_hdl);
-    const char *c_fullname = acc_fetch_fullname(raw_hdl);
 
     if (!c_name) {
         LOG_DEBUG("Unable to query the name of the raw handle.");
@@ -230,9 +229,12 @@ GpiObjHdl *FliImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *) {
     }
 
     std::string name = c_name;
-    /* The handle store identifies objects by their full name, so it must be
-     * the same however the object was reached. */
-    std::string fq_name = vhdl_canonical_name(c_fullname);
+    /* The same full name as get_child_by_name() gives the object. The parent's
+     * full name is kept as it is, as it may belong to a Verilog scope
+     * (mixed-language design), whose names are case sensitive. */
+    std::string fq_name = parent->get_fullname();
+    if (fq_name != "/") fq_name += "/";
+    fq_name += vhdl_canonical_name(name);
 
     PLI_INT32 accType = acc_fetch_type(raw_hdl);
     PLI_INT32 accFullType = acc_fetch_fulltype(raw_hdl);
@@ -247,10 +249,12 @@ GpiObjHdl *FliImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *) {
  *          a handle if it exists
  */
 /* Find the child of *parent* whose name is exactly *name* by iterating
- * *parent*. */
+ * *parent*. A parent from another implementation cannot be iterated here, so
+ * nothing is found then. */
 static GpiObjHdl *find_child_by_exact_name(GpiImplInterface *impl,
                                            const std::string &name,
                                            GpiObjHdl *parent) {
+    if (!parent->is_this_impl(impl)) return NULL;
     FliIterator iter(impl, parent);
     while (true) {
         std::string child_name;

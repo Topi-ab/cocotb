@@ -46,9 +46,9 @@ if not IS_GHDL:
             ("rec_SIG.field_A",),
         )
     )
+SPELLINGS.append(("gen", ("GEN", "Gen"), ("gEN",)))  # the generate pseudo-region
 # GHDL is unable to access signals in generate loops (gh-2594)
 if not IS_GHDL:
-    SPELLINGS.append(("gen", ("GEN", "Gen"), ("gEN",)))  # the generate pseudo-region
     SPELLINGS.append(
         ("gen[0].g_sig", ("GEN[0].G_SIG", "Gen[0].G_Sig"), ("gEn[0].g_SIG",))
     )
@@ -115,11 +115,20 @@ async def extended_identifier_other_case_not_found(dut: Any) -> None:
 async def handle_identity_survives_discovery(dut: Any) -> None:
     """Handles looked up by name stay the same objects after iterating the design."""
     before = {path: resolve(dut, path) for path, _, _ in SPELLINGS}
+    # first looked up in a spelling that differs from the source
+    first_other = dut.FIRST_OTHER
+    gen_b = dut.GEN_B
 
     discover_all(dut)
 
     for path, handle in before.items():
         assert resolve(dut, path) is handle, f"{path} changed identity"
+    assert any(child is first_other for child in dut)
+    assert dut.first_other is first_other
+    # GHDL is unable to access signals in generate loops (gh-2594)
+    if not IS_GHDL:
+        # iterations are only found if their names match the other spelling
+        assert sum(1 for _ in gen_b) == 2
 
 
 @cocotb.test
@@ -142,4 +151,6 @@ async def iterated_children_match_lookup(dut: Any) -> None:
         parents.append(dut.rec_sig)
     for parent in parents:
         for child in parent:
-            assert getattr(parent, child._name) is child, child._path
+            # ask the simulator, not the cache that the iteration has filled
+            found = parent._handle.get_handle_by_name(child._name)
+            assert found == child._handle, child._path
