@@ -1,0 +1,48 @@
+# Grammar of VhdlName (src/cocotb/share/lib/gpi/vhdl_names.hpp) as regular
+# expressions on bytes (ISO 8859-1). The only definition: the reference model
+# (vhdl_names_ref.py) and the fast checker (fast/ref_pcre.hpp) both read it.
+# ${X} is an earlier definition.
+
+# --- Mode::Strict, the LRM grammar (IEEE 1076-2019, 15.4 and 15.6) ---
+L         = [A-Za-z\xc0-\xd6\xd8-\xf6\xf8-\xff]
+D         = [0-9]
+G         = [\x20-\x7e\xa0-\xff]
+G_NO_BS   = [\x20-\x5b\x5d-\x7e\xa0-\xff]
+BASIC     = ${L}(?:_?(?:${L}|${D}))*
+EXTENDED  = \\(?:${G_NO_BS}|\\\\)+\\
+INTEGER   = -?${D}(?:_?${D})*
+CHAR      = '${G}'
+ITEM      = (?:${INTEGER}|${CHAR}|${BASIC}|${EXTENDED})
+INDEX     = \(${ITEM}(?:,${ITEM})*\)
+NAME      = (?:${BASIC}|${EXTENDED})(?:${INDEX})*
+# NAME split into the identifier (group 1) and the indices (group 2)
+NAME_PARTS = (${BASIC}|${EXTENDED})((?:${INDEX})*)
+
+# --- Mode::Relaxed ---
+# an extended identifier in source form, read as one token (atomic: the
+# first single backslash closes it)
+XID       = \\(?>(?:[^\\]|\\\\)+)\\
+# rule 1: an index is parenthesized groups; inside, 'c' and ${XID} are skipped
+# (atomic: the first alternative that matches is taken, as when scanning)
+GROUP     = \((?>'[\s\S]'|${XID}|[^\\)])*\)
+REL_INDEX = (?:${GROUP})+
+# The rules of the header comment, each a full match of the whole name. The
+# first that matches gives the identifier (group 1) and the index (group 2).
+# rule 2a: an extended identifier in source form (the characters with a
+# backslash written twice) and an index or nothing
+SOURCE_NAME = \\((?>(?:[^\\]|\\\\)+))\\((?:${REL_INDEX})?)
+# rule 2b: else, up to the last backslash followed by an index or nothing
+# (greedy), the characters taken as they are
+REPORTED_NAME = \\([\s\S]+)\\((?:${REL_INDEX})?)
+# rule 3: else, a name not starting with a backslash, split at its first "("
+# if an index follows (the identifier, which may be empty, is then basic if it
+# matches BASIC)
+SPLIT_NAME = ((?:[^(\\][^(]*)?)(${REL_INDEX})
+# key of an index: one token at a time; tokens of more than one byte are kept,
+# a single byte is folded
+INDEX_TOKEN = '[\s\S]'|${XID}|[\s\S]
+
+# VhdlName::last_component() and vhdl_path_key() split names at separators
+# outside extended identifiers, character literals and indices; they are not
+# written as regexes here, but step by step in vhdl_names_ref.py and
+# fast/ref_pcre.hpp, from the comments in vhdl_names.hpp.

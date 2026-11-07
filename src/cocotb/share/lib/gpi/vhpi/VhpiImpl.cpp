@@ -12,12 +12,9 @@
 #include <cstring>
 
 #include "../logging.hpp"
+#include "../vhdl_names.hpp"
 #include "_vendor/vhpi/vhpi_user.h"
 #include "vhpi_user_ext.h"
-
-#ifdef NVC
-#include <algorithm>
-#endif
 
 #define CASE_STR(_X) \
     case _X:         \
@@ -298,22 +295,17 @@ bool is_enum_boolean(vhpiHandleT hdl) {
 }
 
 static bool compare_names(const std::string &a, const std::string &b) {
-#ifdef NVC
-    /* NVC does not properly implement the CaseName property and returns
-       Names instead (nickg/nvc#723). */
-    return a.size() == b.size() &&
-           equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-               return std::toupper(x) == std::toupper(y);
-           });
-#else
-    return a == b;
-#endif
+    /* Basic identifiers compare case insensitively, extended identifiers
+       exactly. This also covers NVC, which returns the Name instead of the
+       CaseName property (nickg/nvc#723). */
+    return vhdl_names_equal(a, b);
 }
 
 GpiObjHdl *VhpiImpl::create_gpi_obj_from_handle(vhpiHandleT new_hdl,
                                                 const std::string &name,
                                                 const std::string &fq_name,
-                                                bool owns_handle) {
+                                                bool owns_handle,
+                                                GpiObjHdl *parent) {
     vhpiIntT type;
     gpi_objtype gpi_type;
     GpiObjHdl *new_obj = NULL;
@@ -468,6 +460,14 @@ GpiObjHdl *VhpiImpl::create_gpi_obj_from_handle(vhpiHandleT new_hdl,
                 }
             }
 
+            /* A generate pseudo-region borrows the handle of its parent, and
+             * is told apart from the parent by its name. This fails when the
+             * generate label is the same VHDL name as the parent (e.g. a
+             * for-generate "u" in the architecture of instance "u", in any
+             * case): the pseudo-region is then taken for the parent region
+             * and cannot be indexed. FliImpl and VpiImpl (GHDL) decide in the
+             * same way. Fixing this needs the callers that borrow the parent
+             * handle to say so explicitly. */
             if (!compare_names(name, hdl_name)) {
                 LOG_DEBUG("VHPI: Found pseudo-region %s", fq_name.c_str());
                 gpi_type = GPI_GENARRAY;
@@ -530,6 +530,15 @@ GpiObjHdl *VhpiImpl::create_gpi_obj_from_handle(vhpiHandleT new_hdl,
         new_obj->set_owns_handle(false);
         delete new_obj;
         new_obj = NULL;
+    } else {
+        /* The handle store keeps objects under a key that is the same however
+           the object was reached: VHDL names in canonical form. The name of a
+           child of another implementation's scope (a Verilog instance label
+           in a mixed-language design) is case sensitive and kept as it is. */
+        new_obj->set_key(
+            parent ? vhdl_child_key(parent->get_key(), parent->get_fullname(),
+                                    fq_name, parent->is_this_impl(this))
+                   : vhdl_component_key(fq_name));
     }
 
 out:
@@ -546,10 +555,6 @@ static std::string fully_qualified_name(const std::string &name,
     } else {
         fq_name += "." + name;
     }
-#ifdef NVC
-    /* Convert to a canonical form to avoid problems with case insensitivity. */
-    std::transform(fq_name.begin(), fq_name.end(), fq_name.begin(), ::toupper);
-#endif
     return fq_name;
 }
 
@@ -567,7 +572,8 @@ GpiObjHdl *VhpiImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
     std::string name = c_name;
     std::string fq_name = fully_qualified_name(name, parent);
 
-    GpiObjHdl *new_obj = create_gpi_obj_from_handle(new_hdl, name, fq_name);
+    GpiObjHdl *new_obj =
+        create_gpi_obj_from_handle(new_hdl, name, fq_name, true, parent);
     if (new_obj == NULL) {
         vhpi_release_handle(new_hdl);
         LOG_DEBUG("VHPI: Unable to fetch object %s", fq_name.c_str());
@@ -577,6 +583,34 @@ GpiObjHdl *VhpiImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
     return new_obj;
 }
 
+/* Find the child of *parent* whose name is exactly *name* by iterating
+ * *parent*. A parent from another implementation cannot be iterated here, so
+ * nothing is found then. */
+static GpiObjHdl *find_child_by_exact_name(GpiImplInterface *impl,
+                                           const std::string &name,
+                                           GpiObjHdl *parent) {
+    if (!parent->is_this_impl(impl)) return NULL;
+    VhpiIterator iter(impl, parent);
+    while (true) {
+        std::string child_name;
+        GpiObjHdl *child = NULL;
+        void *raw_hdl = NULL;
+        switch (iter.next_handle(child_name, &child, &raw_hdl)) {
+            case GpiIterator::NATIVE:
+                if (vhdl_names_equal(child_name, name)) return child;
+                delete child;
+                break;
+            case GpiIterator::NOT_NATIVE_NO_NAME:
+                vhpi_release_handle(static_cast<vhpiHandleT>(raw_hdl));
+                break;
+            case GpiIterator::END:
+                return NULL;
+            default:
+                break;
+        }
+    }
+}
+
 GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
                                        GpiObjHdl *parent) {
     vhpiHandleT vhpi_hdl = parent->get_handle<vhpiHandleT>();
@@ -584,13 +618,49 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
     vhpiHandleT new_hdl;
     bool owns_handle = true;
     std::string fq_name = fully_qualified_name(name, parent);
+    // the name the object is known by (see the retry below)
+    std::string obj_name = name;
 
     std::vector<char> writable(fq_name.begin(), fq_name.end());
     writable.push_back('\0');
 
     new_hdl = vhpi_handle_by_name(&writable[0], NULL);
 
-    if (new_hdl == NULL && parent->get_type() == GPI_STRUCTURE) {
+    /* Some simulators do not find an extended identifier with a backslash in
+     * it by its source form (the backslash written twice), only with the
+     * backslash written once. The object is then known by that name. */
+    if (new_hdl == NULL && vhdl_is_extended(name)) {
+        std::string single = VhdlName(name).single_backslash_form();
+        if (single != name) {
+            std::string single_fq_name = fully_qualified_name(single, parent);
+            std::vector<char> single_writable(single_fq_name.begin(),
+                                              single_fq_name.end());
+            single_writable.push_back('\0');
+            new_hdl = vhpi_handle_by_name(&single_writable[0], NULL);
+            if (new_hdl != NULL) {
+                fq_name = single_fq_name;
+                obj_name = single;
+            }
+        }
+    }
+
+    /* Some simulators also match extended identifiers case insensitively and
+     * may return an object whose name differs in case. */
+    if (new_hdl != NULL && vhdl_is_extended(name)) {
+        const char *found_name = vhpi_get_str(vhpiCaseNameP, new_hdl);
+        if (vhdl_extended_name_differs(found_name, name)) {
+            LOG_DEBUG("VHPI: %s matched %s, searching for an exact match",
+                      fq_name.c_str(), found_name ? found_name : "(null)");
+            vhpi_release_handle(new_hdl);
+            return find_child_by_exact_name(this, name, parent);
+        }
+    }
+
+    /* The fallbacks below need a VHPI handle of the parent. */
+    bool native_parent = parent->is_this_impl(this);
+
+    if (new_hdl == NULL && native_parent &&
+        parent->get_type() == GPI_STRUCTURE) {
         /* vhpi_handle_by_name() doesn't always work for records, specifically
          * records in generics */
         vhpiHandleT iter = vhpi_iterator(vhpiSelectedNames, vhpi_hdl);
@@ -611,7 +681,7 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
                 vhpi_release_handle(new_hdl);
             }
         }
-    } else if (new_hdl == NULL) {
+    } else if (new_hdl == NULL && native_parent) {
         /* If not found, check to see if the name of a generate loop */
         vhpiHandleT iter = vhpi_iterator(vhpiInternalRegions, vhpi_hdl);
 
@@ -655,12 +725,16 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
     if (owns_handle && vhpi_get(vhpiKindP, new_hdl) == vhpiForGenerateK) {
         vhpi_release_handle(new_hdl);
 
+        if (!native_parent) {
+            // The parent's handle is not a VHPI handle.
+            return NULL;
+        }
         new_hdl = vhpi_hdl;
         owns_handle = false;
     }
 
-    GpiObjHdl *new_obj =
-        create_gpi_obj_from_handle(new_hdl, name, fq_name, owns_handle);
+    GpiObjHdl *new_obj = create_gpi_obj_from_handle(new_hdl, obj_name, fq_name,
+                                                    owns_handle, parent);
     if (new_obj == NULL) {
         if (owns_handle) vhpi_release_handle(new_hdl);
         LOG_DEBUG("VHPI: Unable to fetch object %s", fq_name.c_str());
@@ -929,7 +1003,7 @@ GpiObjHdl *VhpiImpl::get_child_by_index(int32_t index, GpiObjHdl *parent) {
     }
 
     GpiObjHdl *new_obj =
-        create_gpi_obj_from_handle(new_hdl, name, fq_name, owns_handle);
+        create_gpi_obj_from_handle(new_hdl, name, fq_name, owns_handle, parent);
     if (new_obj == NULL) {
         if (owns_handle) vhpi_release_handle(new_hdl);
         LOG_DEBUG(
@@ -1171,10 +1245,13 @@ void VhpiImpl::sim_end() {
 
 bool VhpiImpl::compare_generate_labels(const std::string &a,
                                        const std::string &b) {
-    /* Compare two generate labels for equality ignoring any suffixed index. */
-    std::size_t a_idx = a.rfind(GEN_IDX_SEP_LHS);
-    std::size_t b_idx = b.rfind(GEN_IDX_SEP_LHS);
-    return compare_names(a.substr(0, a_idx), b.substr(0, b_idx));
+    /* Compare two generate labels for equality ignoring any suffixed index:
+     * "label(i)", or "label__i" (Aldec), which VhdlName does not see as an
+     * index. */
+    const std::string sep = GEN_IDX_SEP_LHS;
+    if (sep == "(") return vhdl_same_identifier(a, b);
+    return vhdl_same_identifier(a.substr(0, a.rfind(sep)),
+                                b.substr(0, b.rfind(sep)));
 }
 
 // Loaded by GPI via GPI_IMPL.

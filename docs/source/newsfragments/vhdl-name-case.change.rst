@@ -1,0 +1,1 @@
+A VHDL extended identifier that is the name being looked up is now only found in exactly its case with VHPI, FLI and GHDL (see :ref:`writing_tbs_accessing_underscore_identifiers` for objects below extended identifiers that differ only in case). Before, NVC and GHDL also found it in another case, e.g. ``dut["\\EXT_SIG\\"]`` gave ``\Ext_Sig\``.

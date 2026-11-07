@@ -151,6 +151,22 @@ async def recursive_discover(dut):
     _discover(dut)
 
 
+@cocotb.test()
+async def name_lookup_and_iteration_agree(dut):
+    """Looking up a child by name and finding it by iteration give the same handle."""
+    names = ["stream_in_data"]
+    if LANGUAGE == "vhdl":
+        names.append("isample_module1")  # component instance
+
+    iterated = {
+        thing.get_name_string().lower(): thing
+        for thing in dut._handle.iterate(cocotb.simulator.OBJECTS)
+    }
+    for name in names:
+        assert name in iterated
+        assert dut._handle.get_handle_by_name(name) == iterated[name], name
+
+
 class ScopeMissingError(Exception):
     pass
 
@@ -481,11 +497,7 @@ async def type_check_verilog(dut):
             assert handle._type == expected
 
 
-# GHDL cannot find signal in "block" statement, may be related to (gh-2594)
-@cocotb.test(
-    skip=LANGUAGE in ["verilog"],
-    expect_error=AttributeError if SIM_NAME.startswith("ghdl") else (),
-)
+@cocotb.test(skip=LANGUAGE in ["verilog"])
 async def access_block_vhdl(dut):
     """Access a VHDL block statement"""
 
@@ -530,8 +542,10 @@ async def discover_all_in_component_vhdl(dut):
     #   1   SAMPLE_BLOCK
     #   1   SAMPLE_BLOCK.clk_inv
     if sim.startswith("ghdl"):
-        # finds SAMPLE_BLOCK twice
-        assert total_count == 10
+        # GHDL reports names in lower case, so SAMPLE_BLOCK (looked up by
+        # access_block_vhdl) and the iterated sample_block are two keys for the
+        # same object, which is counted twice together with its child clk_inv
+        assert total_count == 11
     elif sim.startswith("nvc") and NvcVersion(cocotb.SIM_VERSION) < NvcVersion(
         "1.16.0"
     ):

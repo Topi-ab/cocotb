@@ -45,6 +45,32 @@ jobs:
       collect_coverage: true
       group: ci-licensed
 
+  test_vhdl_names:
+    needs: changes
+    if: needs.changes.outputs.run_tests == 'true'
+    # The VHDL name class (vhdl_names.hpp) against its reference model. It does
+    # not depend on the simulator, the OS or the Python version, so one job.
+    name: VHDL name class
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+    - name: Set up Python
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+      with:
+        python-version: "3.13"
+    - name: Install pytest and PCRE2 (for the fast checker)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libpcre2-dev pkg-config
+        python -m pip install "pytest>=8.4"
+    - name: Test the VHDL name class
+      env:
+        COCOTB_TEST_VHDL_NAMES: "1"
+      run: python -m pytest -p no:cacheprovider -v tests/pytest/test_vhdl_names.py
+
   codecov_notify:
     name: Send Codecov notifications
     needs: [test_dev, test_dev_licensed]

@@ -1,0 +1,134 @@
+[
+  {
+    "what": "no case folding",
+    "old": "if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');",
+    "new": ";",
+    "first_only": false
+  },
+  {
+    "what": "two underscores in a basic identifier",
+    "old": "return alnum ? kBasic : kDead;",
+    "new": "return (alnum || c == '_') ? kBasic : kDead;",
+    "first_only": true
+  },
+  {
+    "what": "backslash not doubled in the source form",
+    "old": "if (c == '\\\\') r += '\\\\';",
+    "new": ";",
+    "first_only": false
+  },
+  {
+    "what": "empty identifier in the single-backslash form",
+    "old": "j >= 2; --j",
+    "new": "j >= 1; --j",
+    "first_only": false
+  },
+  {
+    "what": "empty extended identifier",
+    "old": "return j > i + 1 ? j + 1 : std::string::npos;",
+    "new": "return j + 1;",
+    "first_only": false
+  },
+  {
+    "what": "'.' in an index identifier",
+    "old": "if (alnum) return kIdxBasic;",
+    "new": "if (alnum || c == '.') return kIdxBasic;",
+    "first_only": false
+  },
+  {
+    "what": "a name may end inside an index",
+    "old": "return state == kBasic || state == kExtBs || state == kIdxEnd;",
+    "new": "return state == kBasic || state == kExtBs || state == kIdxEnd || state == kIdxItemEnd;",
+    "first_only": false
+  },
+  {
+    "what": "extended identifier key without backslashes",
+    "old": "if (m_kind == Kind::Extended) return escape(m_identifier);",
+    "new": "if (m_kind == Kind::Extended) return m_identifier;",
+    "first_only": false
+  },
+  {
+    "what": "index skips to the next backslash (an earlier bug)",
+    "old": "std::size_t end = extended_end(s, i);",
+    "new": "std::size_t end = s.find('\\\\', i + 1) == std::string::npos ? std::string::npos : s.find('\\\\', i + 1) + 1;",
+    "first_only": true
+  },
+  {
+    "what": "empty extended identifier in the state machine (an earlier bug)",
+    "old": "if (c == '\\\\') return kExtPair;",
+    "new": "if (c == '\\\\') return kExtBs;",
+    "first_only": true
+  },
+  {
+    "what": "same_identifier compares the text first (an earlier version)",
+    "old": "return identifier_key() == other.identifier_key();",
+    "new": "return m_text == other.m_text || identifier_key() == other.identifier_key();",
+    "first_only": false
+  },
+  {
+    "what": "character literal folded in an index key",
+    "old": "r.append(index, i, 3);",
+    "new": "r += to_upper(index.substr(i, 3));",
+    "first_only": true
+  },
+  {
+    "what": "last_component reads past an extended identifier that does not end",
+    "old": "if (end == std::string::npos) break;",
+    "new": "if (end == std::string::npos) continue;",
+    "first_only": false
+  },
+  {
+    "what": "vhdl_path_key() does not fold the identifier",
+    "old": "key += VhdlName(path.substr(start, ident_end - start)).key() +",
+    "new": "key += path.substr(start, ident_end - start) +",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_path_key() folds the literals of an index",
+    "old": "VhdlName::index_key(path.substr(ident_end, i - ident_end));",
+    "new": "VhdlName(path.substr(ident_end, i - ident_end)).key();",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_extended_name_differs() only looks at the whole reported name",
+    "old": "if (j > 0 && reported_name[j - 1] != '.' &&",
+    "new": "if (j > 0 &&",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_extended_name_differs() compares the text as given",
+    "old": "if (VhdlName(reported_name.substr(j)).same_identifier(wanted)) {",
+    "new": "if (reported_name.substr(j) == name) {",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_child_key() folds Verilog children",
+    "old": "return parent_key + (vhdl ? vhdl_path_key(added) : added);",
+    "new": "return parent_key + vhdl_path_key(added);",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_names_equal() compares the text",
+    "old": "return VhdlName(a) == VhdlName(b);",
+    "new": "return a == b;",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_is_extended() also takes a path",
+    "old": "VhdlName::last_component(name, \".:/\") == name;",
+    "new": "true;",
+    "first_only": true
+  },
+  {
+    "what": "last_component() without the fallback to rule 2",
+    "old": "VhdlName(path.substr(j)).kind() == Kind::Extended) {",
+    "new": "false) {",
+    "first_only": true
+  },
+  {
+    "what": "no index-only names (an earlier version)",
+    "old": "if (p != std::string::npos && is_index(s, p)) {",
+    "new": "if (p != std::string::npos && p > 0 && is_index(s, p)) {",
+    "first_only": true
+  }
+]

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "../logging.hpp"
+#include "../vhdl_names.hpp"
 #include "_vendor/fli/acc_user.h"
 #include "_vendor/fli/acc_vhdl.h"
 #include "_vendor/fli/mti.h"
@@ -88,7 +89,8 @@ bool FliImpl::isTypeSignal(int type, int full_type) {
 GpiObjHdl *FliImpl::create_gpi_obj_from_handle(void *hdl,
                                                const std::string &name,
                                                const std::string &fq_name,
-                                               int accType, int accFullType) {
+                                               int accType, int accFullType,
+                                               GpiObjHdl *parent) {
     GpiObjHdl *new_obj = NULL;
 
     LOG_DEBUG(
@@ -105,7 +107,11 @@ GpiObjHdl *FliImpl::create_gpi_obj_from_handle(void *hdl,
          */
         std::string rgn_name =
             mti_GetRegionName(static_cast<mtiRegionIdT>(hdl));
-        if (name != rgn_name) {
+        // Below another implementation's scope, the name is a Verilog label.
+        bool same_name = (parent && !parent->is_this_impl(this))
+                             ? name == rgn_name
+                             : vhdl_names_equal(name, rgn_name);
+        if (!same_name) {
             LOG_DEBUG("Found pseudo-region %s -> %p", fq_name.c_str(), hdl);
             new_obj =
                 new FliObjHdl(this, hdl, GPI_GENARRAY, accType, accFullType);
@@ -214,10 +220,19 @@ GpiObjHdl *FliImpl::create_gpi_obj_from_handle(void *hdl,
         return NULL;
     }
 
+    /* The handle store keeps objects under a key that is the same however the
+     * object was reached: VHDL names in canonical form. The name of a child of
+     * another implementation's scope (a Verilog instance label in a
+     * mixed-language design) is case sensitive and kept as it is. */
+    new_obj->set_key(parent ? vhdl_child_key(parent->get_key(),
+                                             parent->get_fullname(), fq_name,
+                                             parent->is_this_impl(this))
+                            : vhdl_component_key(fq_name));
+
     return new_obj;
 }
 
-GpiObjHdl *FliImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *) {
+GpiObjHdl *FliImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
     LOG_DEBUG("Trying to convert a raw handle to an FLI Handle.");
 
     const char *c_name = acc_fetch_name(raw_hdl);
@@ -229,13 +244,49 @@ GpiObjHdl *FliImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *) {
     }
 
     std::string name = c_name;
-    std::string fq_name = c_fullname;
+    /* The key is built as get_child_by_name() builds it for a module parent,
+     * so that both give the object the same key. */
+    std::string by_name = parent->get_fullname();
+    if (by_name != "/") by_name += "/";
+    by_name += name;
+    std::string fq_name = c_fullname ? c_fullname : by_name;
 
     PLI_INT32 accType = acc_fetch_type(raw_hdl);
     PLI_INT32 accFullType = acc_fetch_fulltype(raw_hdl);
 
-    return create_gpi_obj_from_handle(raw_hdl, name, fq_name, accType,
-                                      accFullType);
+    GpiObjHdl *new_obj = create_gpi_obj_from_handle(
+        raw_hdl, name, fq_name, accType, accFullType, parent);
+    if (new_obj) {
+        new_obj->set_key(vhdl_child_key(parent->get_key(),
+                                        parent->get_fullname(), by_name,
+                                        parent->is_this_impl(this)));
+    }
+    return new_obj;
+}
+
+/* Find the child of *parent* whose name is exactly *name* by iterating
+ * *parent*. A parent from another implementation cannot be iterated here, so
+ * nothing is found then. */
+static GpiObjHdl *find_child_by_exact_name(GpiImplInterface *impl,
+                                           const std::string &name,
+                                           GpiObjHdl *parent) {
+    if (!parent->is_this_impl(impl)) return NULL;
+    FliIterator iter(impl, parent);
+    while (true) {
+        std::string child_name;
+        GpiObjHdl *child = NULL;
+        void *raw_hdl = NULL;
+        switch (iter.next_handle(child_name, &child, &raw_hdl)) {
+            case GpiIterator::NATIVE:
+                if (vhdl_names_equal(child_name, name)) return child;
+                delete child;
+                break;
+            case GpiIterator::END:
+                return NULL;
+            default:
+                break;
+        }
+    }
 }
 
 /**
@@ -286,20 +337,44 @@ GpiObjHdl *FliImpl::get_child_by_name(const std::string &name,
     HANDLE hdl = NULL;
     PLI_INT32 accType;
     PLI_INT32 accFullType;
+    /* Name of the object found, to check an extended identifier. */
+    bool check_name = vhdl_is_extended(name);
+    std::string found_name;
 
     if (search_rgn && (hdl = mti_FindRegion(&writable[0])) != NULL) {
+        const char *c_found =
+            check_name ? mti_GetRegionName(static_cast<mtiRegionIdT>(hdl))
+                       : NULL;
+        if (c_found) found_name = c_found;
         accType = acc_fetch_type(hdl);
         accFullType = acc_fetch_fulltype(hdl);
         LOG_DEBUG("Found region %s -> %p", fq_name.c_str(), hdl);
         LOG_DEBUG("        Type: %d", accType);
         LOG_DEBUG("   Full Type: %d", accFullType);
     } else if (search_sig && (hdl = mti_FindSignal(&writable[0])) != NULL) {
+        if (check_name && obj_type == GPI_STRUCTURE) {
+            // A record element, named as the iterator names it.
+            char *c_found = mti_GetSignalNameIndirect(
+                static_cast<mtiSignalIdT>(hdl), NULL, 0);
+            if (c_found) {
+                found_name = c_found;
+                mti_VsimFree(c_found);
+            }
+        } else if (check_name) {
+            const char *c_found =
+                mti_GetSignalName(static_cast<mtiSignalIdT>(hdl));
+            if (c_found) found_name = c_found;
+        }
         accType = acc_fetch_type(hdl);
         accFullType = acc_fetch_fulltype(hdl);
         LOG_DEBUG("Found a signal %s -> %p", fq_name.c_str(), hdl);
         LOG_DEBUG("        Type: %d", accType);
         LOG_DEBUG("   Full Type: %d", accFullType);
     } else if (search_var && (hdl = mti_FindVar(&writable[0])) != NULL) {
+        const char *c_found =
+            check_name ? mti_GetVarName(static_cast<mtiVariableIdT>(hdl))
+                       : NULL;
+        if (c_found) found_name = c_found;
         accFullType = accType =
             mti_GetVarKind(static_cast<mtiVariableIdT>(hdl));
         LOG_DEBUG("Found a variable %s -> %p", fq_name.c_str(), hdl);
@@ -325,7 +400,8 @@ GpiObjHdl *FliImpl::get_child_by_name(const std::string &name,
                     FliObj *fli_obj = dynamic_cast<FliObj *>(parent);
                     return create_gpi_obj_from_handle(
                         parent->get_handle<HANDLE>(), name, fq_name,
-                        fli_obj->get_acc_type(), fli_obj->get_acc_full_type());
+                        fli_obj->get_acc_type(), fli_obj->get_acc_full_type(),
+                        parent);
                 }
             }
         }
@@ -334,6 +410,14 @@ GpiObjHdl *FliImpl::get_child_by_name(const std::string &name,
     if (NULL == hdl) {
         LOG_DEBUG("Didn't find anything named %s", &writable[0]);
         return NULL;
+    }
+
+    /* The simulator may also match extended identifiers case insensitively
+     * and return an object whose name differs in case. */
+    if (check_name && vhdl_extended_name_differs(found_name.c_str(), name)) {
+        LOG_DEBUG("FLI: %s matched %s, searching for an exact match",
+                  fq_name.c_str(), found_name.c_str());
+        return find_child_by_exact_name(this, name, parent);
     }
 
     /* Generate Loops have inconsistent behavior across fli.  A "name"
@@ -348,10 +432,11 @@ GpiObjHdl *FliImpl::get_child_by_name(const std::string &name,
         FliObj *fli_obj = dynamic_cast<FliObj *>(parent);
         return create_gpi_obj_from_handle(parent->get_handle<HANDLE>(), name,
                                           fq_name, fli_obj->get_acc_type(),
-                                          fli_obj->get_acc_full_type());
+                                          fli_obj->get_acc_full_type(), parent);
     }
 
-    return create_gpi_obj_from_handle(hdl, name, fq_name, accType, accFullType);
+    return create_gpi_obj_from_handle(hdl, name, fq_name, accType, accFullType,
+                                      parent);
 }
 
 /**
@@ -392,7 +477,7 @@ GpiObjHdl *FliImpl::get_child_by_index(int32_t index, GpiObjHdl *parent) {
         }
 
         return create_gpi_obj_from_handle(hdl, name, fq_name, accType,
-                                          accFullType);
+                                          accFullType, parent);
     } else if (obj_type == GPI_LOGIC || obj_type == GPI_LOGIC_ARRAY ||
                obj_type == GPI_ARRAY || obj_type == GPI_FIXED_STRING) {
         FliValueObjHdl *fli_obj = reinterpret_cast<FliValueObjHdl *>(parent);
@@ -425,7 +510,7 @@ GpiObjHdl *FliImpl::get_child_by_index(int32_t index, GpiObjHdl *parent) {
             LOG_DEBUG("   Full Type: %d", accFullType);
         }
         return create_gpi_obj_from_handle(hdl, name, fq_name, accType,
-                                          accFullType);
+                                          accFullType, parent);
     } else {
         LOG_ERROR(
             "FLI: Parent of type %d must be of type GPI_GENARRAY, "
@@ -556,7 +641,8 @@ GpiObjHdl *FliImpl::get_root_handle(const char *name) {
 
     for (root = mti_GetTopRegion(); root != NULL; root = mti_NextRegion(root)) {
         LOG_DEBUG("Iterating over: %s", mti_GetRegionName(root));
-        if (name == NULL || !strcmp(name, mti_GetRegionName(root))) break;
+        if (name == NULL || vhdl_names_equal(name, mti_GetRegionName(root)))
+            break;
     }
 
     if (!root) {
@@ -703,9 +789,7 @@ GpiIterator *FliImpl::iterate_handle(GpiObjHdl *obj_hdl,
 bool FliImpl::compare_generate_labels(const std::string &a,
                                       const std::string &b) {
     /* Compare two generate labels for equality ignoring any suffixed index. */
-    std::size_t a_idx = a.rfind("(");
-    std::size_t b_idx = b.rfind("(");
-    return a.substr(0, a_idx) == b.substr(0, b_idx);
+    return vhdl_same_identifier(a, b);
 }
 
 decltype(FliIterator::iterate_over) FliIterator::iterate_over = [] {
@@ -1020,7 +1104,7 @@ GpiIterator::Status FliIterator::next_handle(std::string &name, GpiObjHdl **hdl,
 
     FliImpl *fli_impl = reinterpret_cast<FliImpl *>(m_impl);
     new_obj = fli_impl->create_gpi_obj_from_handle(obj, name, fq_name, accType,
-                                                   accFullType);
+                                                   accFullType, m_parent);
     if (new_obj) {
         *hdl = new_obj;
         return GpiIterator::NATIVE;

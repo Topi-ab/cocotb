@@ -576,7 +576,9 @@ class HierarchyArrayObject(
         # FLI and VHPI:       _name(X) where X is the index
         # VHPI(ALDEC):        _name__X where X is the index
         # VPI:                _name[X] where X is the index
-        result = re.match(rf"{re.escape(self._name)}__(?P<index>\d+)$", name)
+        result = re.match(
+            rf"{re.escape(self._name)}__(?P<index>\d+)$", name, re.IGNORECASE
+        )
         if not result:
             result = re.match(
                 rf"{re.escape(self._name)}\((?P<index>\d+)\)$", name, re.IGNORECASE

@@ -28,7 +28,7 @@ class GpiHandleStore {
     GpiObjHdl *check_and_store(GpiObjHdl *hdl) {
         std::map<std::string, GpiObjHdl *>::iterator it;
 
-        const std::string &name = hdl->get_fullname();
+        const std::string &name = hdl->get_key();
 
         LOG_DEBUG("Checking %s exists", name.c_str());
 

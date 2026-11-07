@@ -295,6 +295,43 @@ All named objects, including those with the aforementioned limitations, can be a
     dut["_some_signal"]  # begins with underscore
     dut["\\!WOOOOW!\\"]  # escaped identifier (Verilog), extended identifier (VHDL)
 
+Names follow the case rules of the HDL.
+VHDL basic identifiers are case insensitive (for ASCII letters),
+so every spelling of a name gives the same object.
+VHDL extended identifiers and all Verilog names are case sensitive
+and are only found in exactly their case.
+An extended identifier is written as in the source, with a backslash in it written twice
+(``dut["\\a\\\\b\\"]`` for ``\a\\b\``).
+Iterating a parent can list an object once for each spelling it has been accessed with.
+
+.. code-block:: python
+
+    # VHDL: signal data_in : std_logic_vector(7 downto 0);
+    value = dut.data_in.value.to_unsigned()
+    dut.Data_In.value = (value + 1) % 256  # the same signal
+
+.. note::
+
+    Known limitations:
+
+    * With simulators that match extended identifiers regardless of case, such as NVC and GHDL,
+      objects below VHDL extended identifiers that differ only in case
+      can refer to the same simulator object, so one of them gives the wrong object,
+      for example ``dut["\\Blk\\"].s`` and ``dut["\\blk\\"].s``.
+    * NVC reports a backslash in an extended identifier written once,
+      so identifiers that differ only in one versus two consecutive backslashes
+      (``\a\\b\`` and ``\a\\\\b\``) cannot be told apart there.
+    * In a mixed-language design, a VHDL object that is reached through VPI
+      on a simulator other than GHDL is matched case sensitively.
+    * Letters other than ASCII letters are compared as they are.
+
+.. versionchanged:: 2.2
+
+    VHDL names follow these rules with VHPI, FLI and GHDL.
+    Before, a spelling that differs from the source could give a separate handle,
+    a handle of the wrong type or no object,
+    and NVC and GHDL found extended identifiers in another case.
+
 
 .. _writing_tbs_accessing_verilog_packages:
 
