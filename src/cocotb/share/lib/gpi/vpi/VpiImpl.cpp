@@ -24,7 +24,7 @@ static const bool vhdl_names = true;
 static const bool vhdl_names = false;
 #endif
 
-static std::string canonical_name(const std::string &name) {
+std::string VpiImpl::canonical_name(const std::string &name) {
     return vhdl_names ? vhdl_canonical_name(name) : name;
 }
 

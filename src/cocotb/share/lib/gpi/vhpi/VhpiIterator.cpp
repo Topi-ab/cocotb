@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "../logging.hpp"
+#include "../vhdl_names.hpp"
 #include "./VhpiImpl.hpp"
 #include "_vendor/vhpi/vhpi_user.h"
 
@@ -271,10 +272,13 @@ GpiIterator::Status VhpiIterator::next_handle(std::string &name,
 
     /* We try and create a handle internally, if this is not possible we
        return and GPI will try other implementations with the name
+
+       VHDL names are added to the full name in canonical form, in the same way
+       as VhpiImpl::get_child_by_name() does.
        */
     std::string fq_name = m_parent->get_fullname();
     if (fq_name == ":") {
-        fq_name += name;
+        fq_name += vhdl_canonical_name(name);
     } else if (obj_type == GPI_GENARRAY) {
         std::size_t found = name.rfind(GEN_IDX_SEP_LHS);
 
@@ -282,20 +286,20 @@ GpiIterator::Status VhpiIterator::next_handle(std::string &name,
             fq_name += name.substr(found);
         } else {
             LOG_WARN("VHPI: Unhandled Sub-Element Format - %s", name.c_str());
-            fq_name += "." + name;
+            fq_name += "." + vhdl_canonical_name(name);
         }
     } else if (obj_type == GPI_STRUCTURE) {
         std::size_t found = name.rfind(".");
 
         if (found != std::string::npos) {
-            fq_name += name.substr(found);
+            fq_name += vhdl_canonical_name(name.substr(found));
             name = name.substr(found + 1);
         } else {
             LOG_WARN("VHPI: Unhandled Sub-Element Format - %s", name.c_str());
-            fq_name += "." + name;
+            fq_name += "." + vhdl_canonical_name(name);
         }
     } else {
-        fq_name += "." + name;
+        fq_name += "." + vhdl_canonical_name(name);
     }
     VhpiImpl *vhpi_impl = reinterpret_cast<VhpiImpl *>(m_impl);
     new_obj =

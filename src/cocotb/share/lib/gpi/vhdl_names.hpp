@@ -42,14 +42,15 @@ inline bool vhdl_is_extended_identifier(const std::string &name) {
 
 /* True if the simulator name *found* of an object looked up as the extended
  * identifier *name* is that identifier in exactly the same case. *found* may
- * be prefixed by the path of the parent, e.g. "rec.\Field\".
+ * be prefixed by the path of the parent, e.g. "rec.\Field\" or "/top/\Sig\".
  */
 inline bool vhdl_extended_name_matches(const std::string &found,
                                        const std::string &name) {
     if (found.size() < name.size()) return false;
     std::size_t start = found.size() - name.size();
     return found.compare(start, name.size(), name) == 0 &&
-           (start == 0 || found[start - 1] == '.' || found[start - 1] == ':');
+           (start == 0 || found[start - 1] == '.' || found[start - 1] == ':' ||
+            found[start - 1] == '/');
 }
 
 #endif
