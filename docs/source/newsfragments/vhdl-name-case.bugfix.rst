@@ -1,0 +1,1 @@
+Fixed VHDL objects looked up with names that differ only in the case of basic identifiers (e.g. ``dut.DATA_IN`` and ``dut.data_in``) returning different handles, or not being found, depending on the simulator and on whether the design had already been iterated. Extended identifiers are now matched in exactly their case on all simulators.

@@ -12,12 +12,9 @@
 #include <cstring>
 
 #include "../logging.hpp"
+#include "../vhdl_names.hpp"
 #include "_vendor/vhpi/vhpi_user.h"
 #include "vhpi_user_ext.h"
-
-#ifdef NVC
-#include <algorithm>
-#endif
 
 #define CASE_STR(_X) \
     case _X:         \
@@ -298,16 +295,10 @@ bool is_enum_boolean(vhpiHandleT hdl) {
 }
 
 static bool compare_names(const std::string &a, const std::string &b) {
-#ifdef NVC
-    /* NVC does not properly implement the CaseName property and returns
-       Names instead (nickg/nvc#723). */
-    return a.size() == b.size() &&
-           equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-               return std::toupper(x) == std::toupper(y);
-           });
-#else
-    return a == b;
-#endif
+    /* Basic identifiers compare case insensitively, extended identifiers
+       exactly. This also covers NVC, which returns the Name instead of the
+       CaseName property (nickg/nvc#723). */
+    return vhdl_names_equal(a, b);
 }
 
 GpiObjHdl *VhpiImpl::create_gpi_obj_from_handle(vhpiHandleT new_hdl,
@@ -524,7 +515,9 @@ GpiObjHdl *VhpiImpl::create_gpi_obj_from_handle(vhpiHandleT new_hdl,
         }
     }
 
-    if (new_obj->initialise(name, fq_name)) {
+    /* The handle store identifies objects by their full name, so it must be
+       the same however the object was reached. */
+    if (new_obj->initialise(name, vhdl_canonical_name(fq_name))) {
         // The caller still owns new_hdl on failure, so the destructor must
         // not release it.
         new_obj->set_owns_handle(false);
@@ -546,11 +539,7 @@ static std::string fully_qualified_name(const std::string &name,
     } else {
         fq_name += "." + name;
     }
-#ifdef NVC
-    /* Convert to a canonical form to avoid problems with case insensitivity. */
-    std::transform(fq_name.begin(), fq_name.end(), fq_name.begin(), ::toupper);
-#endif
-    return fq_name;
+    return vhdl_canonical_name(fq_name);
 }
 
 GpiObjHdl *VhpiImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
@@ -577,6 +566,32 @@ GpiObjHdl *VhpiImpl::get_child_from_handle(void *raw_hdl, GpiObjHdl *parent) {
     return new_obj;
 }
 
+/* Find the child of *parent* whose name is exactly *name* by iterating
+ * *parent*. */
+static GpiObjHdl *find_child_by_exact_name(GpiImplInterface *impl,
+                                           const std::string &name,
+                                           GpiObjHdl *parent) {
+    VhpiIterator iter(impl, parent);
+    while (true) {
+        std::string child_name;
+        GpiObjHdl *child = NULL;
+        void *raw_hdl = NULL;
+        switch (iter.next_handle(child_name, &child, &raw_hdl)) {
+            case GpiIterator::NATIVE:
+                if (child_name == name) return child;
+                delete child;
+                break;
+            case GpiIterator::NOT_NATIVE_NO_NAME:
+                vhpi_release_handle(static_cast<vhpiHandleT>(raw_hdl));
+                break;
+            case GpiIterator::END:
+                return NULL;
+            default:
+                break;
+        }
+    }
+}
+
 GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
                                        GpiObjHdl *parent) {
     vhpiHandleT vhpi_hdl = parent->get_handle<vhpiHandleT>();
@@ -589,6 +604,18 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
     writable.push_back('\0');
 
     new_hdl = vhpi_handle_by_name(&writable[0], NULL);
+
+    /* Some simulators also match extended identifiers case insensitively and
+     * may return an object whose name differs in case. */
+    if (new_hdl != NULL && vhdl_is_extended_identifier(name)) {
+        const char *found_name = vhpi_get_str(vhpiCaseNameP, new_hdl);
+        if (!found_name || !vhdl_extended_name_matches(found_name, name)) {
+            LOG_DEBUG("VHPI: %s matched %s, searching for an exact match",
+                      fq_name.c_str(), found_name ? found_name : "(null)");
+            vhpi_release_handle(new_hdl);
+            return find_child_by_exact_name(this, name, parent);
+        }
+    }
 
     if (new_hdl == NULL && parent->get_type() == GPI_STRUCTURE) {
         /* vhpi_handle_by_name() doesn't always work for records, specifically
