@@ -76,5 +76,59 @@
     "old": "if (end == std::string::npos) break;",
     "new": "if (end == std::string::npos) continue;",
     "first_only": false
+  },
+  {
+    "what": "vhdl_path_key() does not fold the identifier",
+    "old": "key += VhdlName(path.substr(start, ident_end - start)).key() +",
+    "new": "key += path.substr(start, ident_end - start) +",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_path_key() folds the literals of an index",
+    "old": "VhdlName::index_key(path.substr(ident_end, i - ident_end));",
+    "new": "VhdlName(path.substr(ident_end, i - ident_end)).key();",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_extended_name_differs() only looks at the whole reported name",
+    "old": "if (j > 0 && reported_name[j - 1] != '.' &&",
+    "new": "if (j > 0 &&",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_extended_name_differs() compares the text as given",
+    "old": "if (VhdlName(reported_name.substr(j)).same_identifier(wanted)) {",
+    "new": "if (reported_name.substr(j) == name) {",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_child_key() folds Verilog children",
+    "old": "return parent_key + (vhdl ? vhdl_path_key(added) : added);",
+    "new": "return parent_key + vhdl_path_key(added);",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_names_equal() compares the text",
+    "old": "return VhdlName(a) == VhdlName(b);",
+    "new": "return a == b;",
+    "first_only": true
+  },
+  {
+    "what": "vhdl_is_extended() also takes a path",
+    "old": "VhdlName::last_component(name, \".:/\") == name;",
+    "new": "true;",
+    "first_only": true
+  },
+  {
+    "what": "last_component() without the fallback to rule 2",
+    "old": "VhdlName(path.substr(j)).kind() == Kind::Extended) {",
+    "new": "false) {",
+    "first_only": true
+  },
+  {
+    "what": "no index-only names (an earlier version)",
+    "old": "if (p != std::string::npos && is_index(s, p)) {",
+    "new": "if (p != std::string::npos && p > 0 && is_index(s, p)) {",
+    "first_only": true
   }
 ]

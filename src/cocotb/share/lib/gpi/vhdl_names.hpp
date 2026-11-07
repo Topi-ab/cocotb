@@ -124,11 +124,17 @@ class VhdlName {
 
     /* The last component of a reported path such as "rec.\Field\" or
      * "/top/sig": the part after the last of *separators* that is not inside
-     * an extended identifier in source form. */
+     * an extended identifier in source form, a character literal or an index
+     * "(...)" or "[...]". If that part is not a name (it
+     * has a backslash but does not start with one), the shortest end of the
+     * string that starts with a backslash, at the start or after one of
+     * *separators*, and is one extended identifier with a backslash in it
+     * written once (rule 2), e.g. "\a\.b\" of "top.\a\.b\", if there is one. */
     static std::string last_component(const std::string &path,
                                       const std::string &separators) {
         std::size_t start = 0;
         bool component_start = true;
+        int depth = 0;
         for (std::size_t i = 0; i < path.size(); ++i) {
             char c = path[i];
             if (component_start && c == '\\') {
@@ -138,14 +144,36 @@ class VhdlName {
                 if (end == std::string::npos) break;
                 i = end - 1;
                 component_start = false;
-            } else if (separators.find(c) != std::string::npos) {
+                continue;
+            }
+            component_start = false;
+            if (c == '\'' && i + 2 < path.size() && path[i + 2] == '\'') {
+                i += 2;
+            } else if (c == '\\' && depth > 0) {
+                std::size_t end = extended_end(path, i);
+                if (end != std::string::npos) i = end - 1;
+            } else if (c == '(' || c == '[') {
+                ++depth;
+            } else if ((c == ')' || c == ']') && depth > 0) {
+                --depth;
+            } else if (depth == 0 && separators.find(c) != std::string::npos) {
                 start = i + 1;
                 component_start = true;
-            } else {
-                component_start = false;
             }
         }
-        return path.substr(start);
+        std::string last = path.substr(start);
+        if (start > 0 && last[0] != '\\' &&
+            last.find('\\') != std::string::npos) {
+            for (std::size_t j = start; j-- > 0;) {
+                if (path[j] == '\\' &&
+                    (j == 0 ||
+                     separators.find(path[j - 1]) != std::string::npos) &&
+                    VhdlName(path.substr(j)).kind() == Kind::Extended) {
+                    return path.substr(j);
+                }
+            }
+        }
+        return last;
     }
 
     /* End (one past the closing backslash) of the extended identifier in
@@ -346,7 +374,9 @@ class VhdlName {
         return true;
     }
 
-    /* Index key: ASCII letters in upper case, except in "'c'" and "\...\". */
+  public:
+    /* Key of indices, "(...)" or "[...]": ASCII letters in upper case, except
+     * in "'c'" and in extended identifiers in source form. */
     static std::string index_key(const std::string &index) {
         std::string r;
         std::size_t i = 0;
@@ -369,6 +399,7 @@ class VhdlName {
         return r;
     }
 
+  private:
     std::string identifier_key() const {
         if (!m_valid) return m_text;
         if (m_kind == Kind::Extended) return escape(m_identifier);
@@ -407,8 +438,8 @@ class VhdlName {
             return;  // Other
         }
 
-        std::size_t p = s.find('(');
-        if (p != std::string::npos && p > 0 && is_index(s, p)) {
+        std::size_t p = s.find('(');  // may be 0: an index only, e.g. "('a')"
+        if (p != std::string::npos && is_index(s, p)) {
             set(Kind::Other, s.substr(0, p), s.substr(p));
         }
         if (follows_lrm(m_identifier)) m_kind = Kind::Basic;
@@ -442,10 +473,12 @@ inline bool vhdl_same_identifier(const std::string &a, const std::string &b) {
     return VhdlName(a).same_identifier(VhdlName(b));
 }
 
-/* True if *name* is an extended identifier (in source form, or with a
- * backslash in it written once), possibly indexed. */
+/* True if *name* is one extended identifier (in source form, or with a
+ * backslash in it written once), possibly indexed, and not a path such as
+ * "\Blk\.\Sig\". */
 inline bool vhdl_is_extended(const std::string &name) {
-    return VhdlName(name).kind() == VhdlName::Kind::Extended;
+    return VhdlName(name).kind() == VhdlName::Kind::Extended &&
+           VhdlName::last_component(name, ".:/") == name;
 }
 
 /* Key of one component appended to a full name: leading separators ('.', ':'
@@ -456,37 +489,62 @@ inline std::string vhdl_component_key(const std::string &component) {
     return component.substr(0, start) + VhdlName(component.substr(start)).key();
 }
 
-/* Key of a full name: every component (between '.', ':' or '/' outside an
- * extended identifier) as by vhdl_component_key(). A component may end in a
- * "[...]" index (VPI), whose ASCII letters are folded. */
+/* Key of a path such as "top.u_sub.\Sig\", ".gen(0).s" or "top.arr['a']":
+ * the separators ('.', ':' or '/') as they are, and of every component its
+ * key as a VhdlName, or, for a component with a "[...]" index (VPI), the key
+ * of the name before it and the index key of the rest. A separator inside an
+ * index, a character literal or an extended identifier in source form does not
+ * end a component. */
 inline std::string vhdl_path_key(const std::string &path) {
     std::string key;
     std::size_t i = 0;
-    while (i < path.size()) {
-        std::size_t sep_end = path.find_first_not_of(".:/", i);
-        if (sep_end == std::string::npos) {
-            key.append(path, i, std::string::npos);
-            break;
+    const std::size_t n = path.size();
+    while (i < n) {
+        if (path[i] == '.' || path[i] == ':' || path[i] == '/') {
+            key += path[i++];
+            continue;
         }
-        key.append(path, i, sep_end - i);
-        std::size_t end = sep_end;
-        if (path[end] == '\\') {
-            std::size_t ext = VhdlName::extended_end(path, end);
-            end = ext == std::string::npos ? path.size() : ext;
+        // the identifier of the component, then its indices
+        std::size_t start = i, ident_end = std::string::npos;
+        if (path[i] == '\\') {
+            std::size_t ext = VhdlName::extended_end(path, i);
+            i = ext == std::string::npos ? n : ext;
+            ident_end = i;
         }
-        end = path.find_first_of(".:/", end);
-        if (end == std::string::npos) end = path.size();
-        std::string comp = path.substr(sep_end, end - sep_end);
-        std::size_t bracket = comp.rfind('[');
-        if (bracket != std::string::npos && bracket > 0 && comp.back() == ']') {
-            std::string idx = comp.substr(bracket);
-            for (char &c : idx)
-                if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-            key += VhdlName(comp.substr(0, bracket)).key() + idx;
+        int depth = 0;
+        while (i < n) {
+            char c = path[i];
+            if (c == '\'' && i + 2 < n && path[i + 2] == '\'') {
+                i += 3;
+                continue;
+            }
+            if (c == '\\' && depth > 0) {
+                std::size_t ext = VhdlName::extended_end(path, i);
+                if (ext != std::string::npos) {
+                    i = ext;
+                    continue;
+                }
+            }
+            if (c == '(' || c == '[') {
+                if (depth == 0 && ident_end == std::string::npos) ident_end = i;
+                ++depth;
+            } else if ((c == ')' || c == ']') && depth > 0) {
+                --depth;
+            } else if (depth == 0 && (c == '.' || c == ':' || c == '/')) {
+                break;
+            }
+            ++i;
+        }
+        // a "[...]" index (VPI) is keyed apart; anything else is one name,
+        // read by the rules of VhdlName (e.g. "gen(0)", or "\a\b\" with a
+        // backslash in it written once)
+        if (ident_end != std::string::npos && ident_end < i &&
+            path[ident_end] == '[') {
+            key += VhdlName(path.substr(start, ident_end - start)).key() +
+                   VhdlName::index_key(path.substr(ident_end, i - ident_end));
         } else {
-            key += VhdlName(comp).key();
+            key += VhdlName(path.substr(start, i - start)).key();
         }
-        i = end;
     }
     return key;
 }
@@ -495,8 +553,9 @@ inline std::string vhdl_path_key(const std::string &path) {
  * *fq_name* was built by appending one component to the full name of its
  * parent: the component is added to the parent's key, as its key if it is a
  * VHDL name (*vhdl*; not for a child of a Verilog scope, whose names are case
- * sensitive). Callers build *fq_name* that way; if one does not, the full
- * name is used as the key, as without these rules. */
+ * sensitive). A dotted name (e.g. "u_sub.\Sig\") is keyed component by
+ * component, as by vhdl_path_key(). Callers build *fq_name* that way; if one
+ * does not, the full name is used as the key, as without these rules. */
 inline std::string vhdl_child_key(const std::string &parent_key,
                                   const std::string &parent_fullname,
                                   const std::string &fq_name, bool vhdl) {
@@ -504,23 +563,34 @@ inline std::string vhdl_child_key(const std::string &parent_key,
         return fq_name;
     }
     std::string added = fq_name.substr(parent_fullname.size());
-    return parent_key + (vhdl ? vhdl_component_key(added) : added);
+    return parent_key + (vhdl ? vhdl_path_key(added) : added);
 }
 
 /* True if the simulator name *found* (possibly prefixed by the path of the
  * parent, e.g. "rec.\Field\" or "/top/\Sig\") of an object looked up as the
- * extended identifier *name* shows that it is another object: its last
- * component is an extended identifier that is not *name* (indices aside), or
- * is reported without backslashes and is not the characters of *name*. No
- * name (NULL or empty) cannot be checked and is not taken as a difference. */
+ * extended identifier *name* shows that it is another object. It is the same
+ * object if an end of *found* that starts at its start or after a '.', ':'
+ * or '/' is the same identifier as *name* (indices aside), however its
+ * backslashes are written. Otherwise it is another one if its last component
+ * is an extended identifier, or is reported without backslashes and is not
+ * the characters of *name*. No name (NULL or empty) cannot be checked and is
+ * not taken as a difference. */
 inline bool vhdl_extended_name_differs(const char *found,
                                        const std::string &name) {
     if (!found || !*found) return false;
+    const std::string reported_name(found);
     VhdlName wanted(name);
-    VhdlName reported(VhdlName::last_component(found, ".:/"));
-    if (reported.kind() == VhdlName::Kind::Extended) {
-        return !reported.same_identifier(wanted);
+    for (std::size_t j = 0; j < reported_name.size(); ++j) {
+        if (j > 0 && reported_name[j - 1] != '.' &&
+            reported_name[j - 1] != ':' && reported_name[j - 1] != '/') {
+            continue;
+        }
+        if (VhdlName(reported_name.substr(j)).same_identifier(wanted)) {
+            return false;
+        }
     }
+    VhdlName reported(VhdlName::last_component(reported_name, ".:/"));
+    if (reported.kind() == VhdlName::Kind::Extended) return true;
     return reported.identifier() != wanted.identifier();
 }
 

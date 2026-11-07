@@ -48,6 +48,51 @@ int vn_same_identifier(const char *a, int alen, int astrict, const char *b,
     return x.same_identifier(y) ? 1 : 0;
 }
 
+/* The helpers the GPI implementations use (vhdl_names.hpp). */
+static std::string arg(const char *s, int len) {
+    return std::string(s, static_cast<std::size_t>(len));
+}
+
+int vn_names_equal(const char *a, int alen, const char *b, int blen) {
+    return vhdl_names_equal(arg(a, alen), arg(b, blen)) ? 1 : 0;
+}
+
+int vn_helper_same_identifier(const char *a, int alen, const char *b,
+                              int blen) {
+    return vhdl_same_identifier(arg(a, alen), arg(b, blen)) ? 1 : 0;
+}
+
+int vn_is_extended(const char *name, int len) {
+    return vhdl_is_extended(arg(name, len)) ? 1 : 0;
+}
+
+/* *found* NULL if flen < 0. */
+int vn_extended_name_differs(const char *found, int flen, const char *name,
+                             int nlen) {
+    std::string f = flen < 0 ? std::string() : arg(found, flen);
+    return vhdl_extended_name_differs(flen < 0 ? nullptr : f.c_str(),
+                                      arg(name, nlen))
+               ? 1
+               : 0;
+}
+
+int vn_component_key(const char *s, int len) {
+    g_out[0] = vhdl_component_key(arg(s, len));
+    return static_cast<int>(g_out[0].size());
+}
+
+int vn_path_key(const char *s, int len) {
+    g_out[0] = vhdl_path_key(arg(s, len));
+    return static_cast<int>(g_out[0].size());
+}
+
+int vn_child_key(const char *pk, int pklen, const char *pf, int pflen,
+                 const char *fq, int fqlen, int vhdl) {
+    g_out[0] = vhdl_child_key(arg(pk, pklen), arg(pf, pflen), arg(fq, fqlen),
+                              vhdl != 0);
+    return static_cast<int>(g_out[0].size());
+}
+
 int vn_last_component(const char *path, int len, const char *seps) {
     g_out[0] = VhdlName::last_component(
         std::string(path, static_cast<std::size_t>(len)), seps);

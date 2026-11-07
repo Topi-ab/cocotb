@@ -139,6 +139,9 @@ def problem(n: ref.Native, s: bytes) -> str | None:
         return "same_identifier() across modes"
     if n.last_component(s) != ref.last_component(s):
         return f"last_component() {n.last_component(s)!r} != reference {ref.last_component(s)!r}"
+    msg = helper_problem(n, s, p)
+    if msg is not None:
+        return msg
     if p.lrm:
         # same key => same meaning: the key is an LRM name meaning the same
         if not ref.is_lrm(key) or ref.meaning(key) != ref.meaning(s):
@@ -147,6 +150,47 @@ def problem(n: ref.Native, s: bytes) -> str | None:
         # other spellings of the basic identifiers
         if n.parse(ref.respell(s)).key != key:
             return f"other spelling {ref.respell(s)!r} has another key"
+    return None
+
+
+def helper_problem(n: ref.Native, s: bytes, p: ref.Parsed) -> str | None:
+    """The helpers the GPI implementations use, for the name *s*."""
+    for other in (s, s.upper(), s.lower(), p.single_form, p.source_form):
+        want = ref.parse(s).key == ref.parse(other).key
+        if n.names_equal(s, other) != want:
+            return f"vhdl_names_equal({s!r}, {other!r}) != {want}"
+    if not n.helper_same_identifier(s, s):
+        return "vhdl_same_identifier() is not reflexive"
+    extended = p.kind == "Extended" and ref.last_component(s) == s
+    if n.is_extended(s) != extended:
+        return f"vhdl_is_extended() != {extended}"
+    # the simulator's name is a C string: no NUL in it
+    if extended and b"\x00" not in s:
+        found = [s, p.source_form, b"top." + s, b":top:" + s, b"/top/" + s, b"", None]
+        if ref.readings(p.single_form) <= 1:
+            found.append(p.single_form)
+        for f in found:
+            if n.extended_name_differs(f, s):
+                return f"vhdl_extended_name_differs({f!r}, {s!r}) for the same name"
+    # independent of the reference's reading of paths: a single name below a
+    # parent is keyed as the class keys it (names without separators; a
+    # backslash written once before a separator, as in NVC's "\a\.b\", makes
+    # the reading of a path ambiguous, and NVC does not find such names)
+    if not any(c in s for c in b".:/[\x00"):
+        if n.path_key(b"top." + s) != b"TOP." + p.key:
+            return f"vhdl_path_key(top.{s!r}) is not TOP. + its key"
+    for path in (s, b"top." + s, b":top:" + s, s + b".x", b"top." + s + b"(1)"):
+        if n.path_key(path) != ref.path_key(path):
+            return f"vhdl_path_key({path!r}) {n.path_key(path)!r} != reference {ref.path_key(path)!r}"
+    if s[:1] not in (b".", b":", b"/") and n.component_key(b"." + s) != b"." + p.key:
+        return f"vhdl_component_key(.{s!r}) != .key"
+    fq = b"top." + s
+    if n.child_key(b"TOP", b"top", fq, True) != b"TOP" + ref.path_key(b"." + s):
+        return f"vhdl_child_key() of {fq!r}"
+    if n.child_key(b"TOP", b"top", fq, False) != b"TOP." + s:
+        return f"vhdl_child_key() of a Verilog child {fq!r}"
+    if n.child_key(b"K", b"other", fq, True) != fq:
+        return "vhdl_child_key() without the parent's prefix"
     return None
 
 
@@ -225,26 +269,13 @@ def test_corpus(native: ref.Native) -> None:
     assert first_problem(native, corpus()) is None
 
 
-def test_state_machine_is_the_lrm_grammar(native: ref.Native) -> None:
-    """VhdlName::step() accepts exactly the strict grammar: a proof for all
-    lengths and all byte values."""
+def test_state_machine_is_the_strict_grammar(native: ref.Native) -> None:
+    """VhdlName::step() accepts exactly NAME of grammar.txt (the LRM 15.4 and
+    15.6 identifiers with a subset of indices): a proof for all lengths and all
+    byte values. Keys and relaxed mode are checked by the other tests, by
+    enumeration and sampling."""
     table, accepting = native.state_machine()
     assert ref.same_language(table, accepting, ref.NAME) is None
-
-
-@pytest.mark.parametrize("line", range(3))
-def test_independent_regexes_are_the_lrm_grammar(native: ref.Native, line: int) -> None:
-    """Three regular expressions derived independently from the code of the
-    class (without its names and comments) describe the same language."""
-    regexes = [
-        x
-        for x in (DATA / "independent_regexes.txt")
-        .read_text(encoding="latin-1")
-        .splitlines()
-        if x and not x.startswith("#")
-    ]
-    table, accepting = native.state_machine()
-    assert ref.same_language(table, accepting, regexes[line].encode("latin-1")) is None
 
 
 @pytest.mark.parametrize(

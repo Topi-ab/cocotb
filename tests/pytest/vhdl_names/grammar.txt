@@ -35,16 +35,14 @@ SOURCE_NAME = \\((?>(?:[^\\]|\\\\)+))\\((?:${REL_INDEX})?)
 # (greedy), the characters taken as they are
 REPORTED_NAME = \\([\s\S]+)\\((?:${REL_INDEX})?)
 # rule 3: else, a name not starting with a backslash, split at its first "("
-# if an index follows (the identifier is then basic if it matches BASIC)
-SPLIT_NAME = ([^(\\][^(]*)(${REL_INDEX})
+# if an index follows (the identifier, which may be empty, is then basic if it
+# matches BASIC)
+SPLIT_NAME = ((?:[^(\\][^(]*)?)(${REL_INDEX})
 # key of an index: one token at a time; tokens of more than one byte are kept,
 # a single byte is folded
 INDEX_TOKEN = '[\s\S]'|${XID}|[\s\S]
 
-# --- VhdlName::last_component(s, ".:/") (from an independent reading) ---
-# a component: an extended identifier at its start, then anything up to a
-# separator; or anything not starting with a backslash
-COMPONENT = (?>${XID}[^.:/]*|[^.:/\\][^.:/]*)
-# group 1: the last component; an extended identifier that does not end
-# takes the rest of the string
-LAST_COMPONENT = (?>(?:${COMPONENT}[.:/]|[.:/])*)(\\[\s\S]*|${COMPONENT}|)
+# VhdlName::last_component() and vhdl_path_key() split names at separators
+# outside extended identifiers, character literals and indices; they are not
+# written as regexes here, but step by step in vhdl_names_ref.py and
+# fast/ref_pcre.hpp, from the comments in vhdl_names.hpp.

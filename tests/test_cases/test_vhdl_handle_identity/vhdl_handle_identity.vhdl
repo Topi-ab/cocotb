@@ -61,6 +61,9 @@ architecture rtl of vhdl_handle_identity is
     signal \Back\\Slash\ : std_logic := '0';
     signal \back\\slash\ : std_logic := '0';
     signal \Back\\slash\ : std_logic := '0';  -- differs only after the backslash
+    -- two-dimensional array with an extended name; row 1 is all '1'
+    type arr2d_t is array (0 to 1, 0 to 1) of std_logic;
+    signal \A\\B\ : arr2d_t := (('0', '0'), ('1', '1'));
     -- only looked up in other spellings than the source one
     signal First_Other : std_logic;
 begin
@@ -94,4 +97,25 @@ begin
     begin
         g_sig <= data_in(i + 2);
     end generate gen_b;
+
+    -- a region with an extended name, with a basic and an extended name in it
+    \Blk\ : block
+        signal B_Sig : std_logic := '0';
+        signal \Sig\ : std_logic := '0';
+    begin
+    end block;
+
+    -- a region with a basic name and two extended names in it that differ only
+    -- in case
+    Plain_Blk : block
+        signal \foo\ : std_logic := '0';
+        signal \FOO\ : std_logic := '1';
+    begin
+    end block;
+
+    -- a generate with an extended label
+    \Gen\ : for i in 0 to 1 generate
+        signal G_Sig : std_logic := '0';
+    begin
+    end generate;
 end architecture rtl;

@@ -28,6 +28,8 @@ from cocotb.triggers import Timer
 
 SIM_NAME = cocotb.SIM_NAME.lower()
 IS_GHDL = SIM_NAME.startswith("ghdl")
+IS_NVC = SIM_NAME.startswith("nvc")
+IS_RIVIERA = SIM_NAME.startswith("riviera")
 
 Spelling = tuple[str, tuple[str, ...], tuple[str, ...]]
 
@@ -64,6 +66,7 @@ BACKSLASH_NAMES = ["\\Back\\\\Slash\\", "\\back\\\\slash\\", "\\Back\\\\slash\\"
 BACKSLASH_PAIRS = [
     (BACKSLASH_NAMES[0], BACKSLASH_NAMES[1]),
     (BACKSLASH_NAMES[0], BACKSLASH_NAMES[2]),  # differ only after the backslash
+    (BACKSLASH_NAMES[1], BACKSLASH_NAMES[2]),  # differ only before the backslash
 ]
 
 
@@ -116,6 +119,17 @@ async def check_distinct(dut: Any, pairs: list[tuple[str, str]]) -> None:
         assert other.value == 0, other_name
 
 
+async def check_one_hot(handles: list[Any], names: list[str]) -> None:
+    """Writing 1 to one object and 0 to the others reaches each one alone."""
+    for hot in range(len(handles)):
+        for i, h in enumerate(handles):
+            h.value = 1 if i == hot else 0
+        await Timer(1, "ns")
+        assert [int(h.value) for h in handles] == [
+            1 if i == hot else 0 for i in range(len(handles))
+        ], names[hot]
+
+
 @cocotb.test
 async def extended_identifiers_stay_distinct(dut: Any) -> None:
     """Extended identifiers are case sensitive: \\Ext_Sig\\ and \\ext_sig\\ differ."""
@@ -126,6 +140,7 @@ async def extended_identifiers_stay_distinct(dut: Any) -> None:
 async def extended_identifiers_with_backslash_stay_distinct(dut: Any) -> None:
     """The same with a backslash (written twice) in the extended identifiers."""
     await check_distinct(dut, BACKSLASH_PAIRS)
+    await check_one_hot([dut[n] for n in BACKSLASH_NAMES], BACKSLASH_NAMES)
 
 
 @cocotb.test
@@ -217,7 +232,8 @@ async def iterated_children_match_lookup(dut: Any) -> None:
             # by name: "#IMPLICIT#" and "s__218_3" (Questa QIS flow, QSIM-84124)
             if child._name.startswith("#") or re.fullmatch(r"s__\d+_\d+", child._name):
                 continue
-            # ask the simulator, not the cache that the iteration has filled
+            # looking the iterated name up again through the GPI gives the
+            # object of the handle store, which iteration and lookup share
             found = parent._handle.get_handle_by_name(child._name)
             assert found == child._handle, child._path
 
@@ -232,3 +248,72 @@ async def iterated_extended_identifiers_stay_distinct(dut: Any) -> None:
     ]
     assert len(found) == len(BACKSLASH_NAMES)
     assert len(set(found)) == len(BACKSLASH_NAMES)
+    # the iterated objects are distinct signals, and the ones found by name
+    # iteration lists an object once per spelling it was accessed with
+    iterated = list({id(c): c for c in dut if "slash" in c._name.lower()}.values())
+    assert len(iterated) == len(BACKSLASH_NAMES)
+    await check_one_hot(iterated, [c._name for c in iterated])
+    for child in iterated:
+        assert dut[child._name] is child, child._name
+
+
+@cocotb.skipif(
+    IS_GHDL, reason="GHDL takes an extended block for a generate pseudo-region"
+)
+@cocotb.test
+async def extended_region_keeps_identity(dut: Any) -> None:
+    """A region with an extended name, and a basic name in it, keep their handles."""
+    blk = dut["\\Blk\\"]
+    sig = blk.b_sig
+    assert blk.B_SIG is sig
+    discover_all(dut)
+    assert dut["\\Blk\\"] is blk
+    assert dut["\\Blk\\"].B_Sig is sig
+
+
+@cocotb.skipif(
+    IS_GHDL, reason="GHDL is unable to access signals in generate loops (gh-2594)"
+)
+@cocotb.skipif(
+    IS_RIVIERA,
+    reason="Riviera-PRO reports the iterations of an extended generate label as "
+    "\\Gen__0\\, so the label is not found",
+)
+@cocotb.test
+async def extended_generate_label(dut: Any) -> None:
+    """A generate with an extended label is found only in exactly its case."""
+    gen = dut["\\Gen\\"]
+    assert gen[0].G_SIG is gen[0].g_sig
+    with pytest.raises(KeyError):
+        dut["\\GEN\\"]
+
+
+@cocotb.skipif(IS_GHDL, reason="GHDL does not find this array by name")
+@cocotb.test
+async def extended_two_dimensional_array(dut: Any) -> None:
+    """Indexing an extended two-dimensional array reaches the right elements."""
+    arr = dut["\\A\\\\B\\"]
+    assert arr[1][0].value == 1
+    assert arr[0][0].value == 0
+
+
+@cocotb.test
+async def dotted_path_to_extended_names(dut: Any) -> None:
+    """A dotted path to extended names that differ only in case gives two objects."""
+    lower = dut["plain_blk.\\foo\\"]
+    upper = dut["plain_blk.\\FOO\\"]
+    assert lower is not upper
+    # NVC and GHDL can match extended identifiers in a path regardless of case,
+    # so which signal they give depends on the simulator, not on cocotb
+    if not (IS_NVC or IS_GHDL):
+        assert (int(lower.value), int(upper.value)) == (0, 1)
+
+
+@cocotb.skipif(
+    IS_GHDL, reason="GHDL takes an extended block for a generate pseudo-region"
+)
+@cocotb.test
+async def dotted_path_between_extended_names(dut: Any) -> None:
+    """A dotted path from an extended name to an extended name is the object
+    found step by step."""
+    assert dut["\\Blk\\.\\Sig\\"] is dut["\\Blk\\"]["\\Sig\\"]

@@ -618,6 +618,8 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
     vhpiHandleT new_hdl;
     bool owns_handle = true;
     std::string fq_name = fully_qualified_name(name, parent);
+    // the name the object is known by (see the retry below)
+    std::string obj_name = name;
 
     std::vector<char> writable(fq_name.begin(), fq_name.end());
     writable.push_back('\0');
@@ -635,7 +637,10 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
                                               single_fq_name.end());
             single_writable.push_back('\0');
             new_hdl = vhpi_handle_by_name(&single_writable[0], NULL);
-            if (new_hdl != NULL) fq_name = single_fq_name;
+            if (new_hdl != NULL) {
+                fq_name = single_fq_name;
+                obj_name = single;
+            }
         }
     }
 
@@ -728,8 +733,8 @@ GpiObjHdl *VhpiImpl::get_child_by_name(const std::string &name,
         owns_handle = false;
     }
 
-    GpiObjHdl *new_obj =
-        create_gpi_obj_from_handle(new_hdl, name, fq_name, owns_handle, parent);
+    GpiObjHdl *new_obj = create_gpi_obj_from_handle(new_hdl, obj_name, fq_name,
+                                                    owns_handle, parent);
     if (new_obj == NULL) {
         if (owns_handle) vhpi_release_handle(new_hdl);
         LOG_DEBUG("VHPI: Unable to fetch object %s", fq_name.c_str());

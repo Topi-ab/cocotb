@@ -60,7 +60,7 @@ SOURCE_NAME_RE = re.compile(GRAMMAR["SOURCE_NAME"])
 REPORTED_NAME_RE = re.compile(GRAMMAR["REPORTED_NAME"])
 SPLIT_NAME_RE = re.compile(GRAMMAR["SPLIT_NAME"])
 INDEX_TOKEN_RE = re.compile(GRAMMAR["INDEX_TOKEN"])
-LAST_COMPONENT_RE = re.compile(GRAMMAR["LAST_COMPONENT"])
+XID_RE = re.compile(GRAMMAR["XID"])
 
 
 @dataclass(frozen=True)
@@ -195,12 +195,102 @@ def respell(s: bytes) -> bytes:
     return b"".join(out)
 
 
-def last_component(s: bytes) -> bytes:
-    """What VhdlName::last_component(s, ".:/") gives."""
-    m = LAST_COMPONENT_RE.fullmatch(s)
-    if not m:
-        raise ValueError(f"LAST_COMPONENT does not match {s!r}")
-    return m.group(1)
+def last_component(s: bytes, seps: bytes = b".:/") -> bytes:
+    """What VhdlName::last_component(s, ".:/") gives (its comment, written out
+    step by step)."""
+    start, i, n, at_start, depth = 0, 0, len(s), True, 0
+    while i < n:
+        c = s[i : i + 1]
+        if at_start and c == b"\\":
+            e = _xid_end(s, i)
+            if e is None:
+                break  # the rest is the last component
+            i, at_start = e, False
+            continue
+        at_start = False
+        if c == b"'" and i + 2 < n and s[i + 2 : i + 3] == b"'":
+            i += 3
+            continue
+        if c == b"\\" and depth > 0:
+            e = _xid_end(s, i)
+            if e is not None:
+                i = e
+                continue
+        if c in (b"(", b"["):
+            depth += 1
+        elif c in (b")", b"]") and depth > 0:
+            depth -= 1
+        elif depth == 0 and c in seps:
+            start, at_start = i + 1, True
+        i += 1
+    last = s[start:]
+    if start > 0 and last[:1] != b"\\" and b"\\" in last:
+        # the shortest end that starts with a backslash at the start or after
+        # a separator and is one extended identifier
+        for j in range(start - 1, -1, -1):
+            if (
+                s[j : j + 1] == b"\\"
+                and (j == 0 or s[j - 1 : j] in (b".", b":", b"/"))
+                and parse(s[j:]).kind == "Extended"
+            ):
+                return s[j:]
+    return last
+
+
+def _xid_end(s: bytes, i: int) -> int | None:
+    """End of the extended identifier in source form at s[i], as XID."""
+    m = XID_RE.match(s, i)
+    return m.end() if m else None
+
+
+def path_key(path: bytes) -> bytes:
+    """What vhdl_path_key() gives: the separators as they are, and of every
+    component its key, or for a "[...]" index the key of the name before it
+    and the index key of the rest. A
+    separator inside "(...)" or "[...]", a character literal or an extended
+    identifier does not end a component (the rules of the comment of
+    vhdl_path_key(), written out step by step)."""
+    out = []
+    i, n = 0, len(path)
+    while i < n:
+        if path[i : i + 1] in (b".", b":", b"/"):
+            out.append(path[i : i + 1])
+            i += 1
+            continue
+        start, ident_end = i, None
+        if path[i : i + 1] == b"\\":
+            e = _xid_end(path, i)
+            i = n if e is None else e
+            ident_end = i
+        depth = 0
+        while i < n:
+            c = path[i : i + 1]
+            if c == b"'" and i + 2 < n and path[i + 2 : i + 3] == b"'":
+                i += 3
+                continue
+            if c == b"\\" and depth > 0:
+                e = _xid_end(path, i)
+                if e is not None:
+                    i = e
+                    continue
+            if c in (b"(", b"["):
+                if depth == 0 and ident_end is None:
+                    ident_end = i
+                depth += 1
+            elif c in (b")", b"]") and depth > 0:
+                depth -= 1
+            elif depth == 0 and c in (b".", b":", b"/"):
+                break
+            i += 1
+        if (
+            ident_end is not None
+            and ident_end < i
+            and path[ident_end : ident_end + 1] == b"["
+        ):
+            out.append(parse(path[start:ident_end]).key + index_key(path[ident_end:i]))
+        else:
+            out.append(parse(path[start:i]).key)
+    return b"".join(out)
 
 
 # --- the native class ---------------------------------------------------------
@@ -226,6 +316,14 @@ class Native:
             ctypes.c_int,
             ctypes.c_char_p,
         ]
+        two = [ctypes.c_char_p, ctypes.c_int] * 2
+        lib.vn_names_equal.argtypes = two
+        lib.vn_helper_same_identifier.argtypes = two
+        lib.vn_extended_name_differs.argtypes = two
+        lib.vn_is_extended.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        lib.vn_component_key.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        lib.vn_path_key.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        lib.vn_child_key.argtypes = [ctypes.c_char_p, ctypes.c_int] * 3 + [ctypes.c_int]
         self.lib = lib
 
     def _out(self, i: int) -> bytes:
@@ -245,6 +343,45 @@ class Native:
 
     def last_component(self, s: bytes, seps: bytes = b".:/") -> bytes:
         n = self.lib.vn_last_component(s, len(s), seps)
+        return self._out(0)[:n]
+
+    # the helpers the GPI implementations use
+
+    def names_equal(self, a: bytes, b: bytes) -> bool:
+        return bool(self.lib.vn_names_equal(a, len(a), b, len(b)))
+
+    def helper_same_identifier(self, a: bytes, b: bytes) -> bool:
+        return bool(self.lib.vn_helper_same_identifier(a, len(a), b, len(b)))
+
+    def is_extended(self, name: bytes) -> bool:
+        return bool(self.lib.vn_is_extended(name, len(name)))
+
+    def extended_name_differs(self, found: bytes | None, name: bytes) -> bool:
+        flen = -1 if found is None else len(found)
+        return bool(
+            self.lib.vn_extended_name_differs(found or b"", flen, name, len(name))
+        )
+
+    def component_key(self, s: bytes) -> bytes:
+        n = self.lib.vn_component_key(s, len(s))
+        return self._out(0)[:n]
+
+    def path_key(self, s: bytes) -> bytes:
+        n = self.lib.vn_path_key(s, len(s))
+        return self._out(0)[:n]
+
+    def child_key(
+        self, parent_key: bytes, parent_full: bytes, fq: bytes, vhdl: bool
+    ) -> bytes:
+        n = self.lib.vn_child_key(
+            parent_key,
+            len(parent_key),
+            parent_full,
+            len(parent_full),
+            fq,
+            len(fq),
+            int(vhdl),
+        )
         return self._out(0)[:n]
 
     def state_machine(self) -> tuple[list[list[int]], set[int]]:

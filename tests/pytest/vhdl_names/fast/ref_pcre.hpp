@@ -121,7 +121,7 @@ class Model {
         item = Regex(g.at("ITEM"), false);
         integer = Regex(g.at("INTEGER"), true);
         charlit = Regex(g.at("CHAR"), true);
-        last_comp = Regex(g.at("LAST_COMPONENT"), true);
+        xid = Regex(g.at("XID"), false);
     }
 
     /* Per-thread state. */
@@ -134,10 +134,59 @@ class Model {
         ~Ctx() { pcre2_match_data_free(md); }
     };
 
+    /* End of an extended identifier in source form at s[i] (XID), or npos. */
+    std::size_t xid_end(const std::string &s, std::size_t i, Ctx &c) const {
+        std::size_t end;
+        return xid.match(s, i, c.md, &end) ? end : std::string::npos;
+    }
+
+    /* VhdlName::last_component(s, ".:/"), from its comment, step by step. */
     std::string last_component(const std::string &s, Ctx &c) const {
-        if (!last_comp.match(s, 0, c.md, nullptr, &c.groups))
-            throw std::logic_error("LAST_COMPONENT does not match");
-        return c.groups.size() > 1 ? c.groups[1] : "";
+        std::size_t start = 0, i = 0, n = s.size();
+        bool at_start = true;
+        int depth = 0;
+        auto sep = [](char ch) { return ch == '.' || ch == ':' || ch == '/'; };
+        while (i < n) {
+            char ch = s[i];
+            if (at_start && ch == '\\') {
+                std::size_t e = xid_end(s, i, c);
+                if (e == std::string::npos) break;
+                i = e;
+                at_start = false;
+                continue;
+            }
+            at_start = false;
+            if (ch == '\'' && i + 2 < n && s[i + 2] == '\'') {
+                i += 3;
+                continue;
+            }
+            if (ch == '\\' && depth > 0) {
+                std::size_t e = xid_end(s, i, c);
+                if (e != std::string::npos) {
+                    i = e;
+                    continue;
+                }
+            }
+            if (ch == '(' || ch == '[') {
+                ++depth;
+            } else if ((ch == ')' || ch == ']') && depth > 0) {
+                --depth;
+            } else if (depth == 0 && sep(ch)) {
+                start = i + 1;
+                at_start = true;
+            }
+            ++i;
+        }
+        std::string last = s.substr(start);
+        if (start > 0 && (last.empty() || last[0] != '\\') &&
+            last.find('\\') != std::string::npos) {
+            for (std::size_t j = start; j-- > 0;) {
+                if (s[j] == '\\' && (j == 0 || sep(s[j - 1])) &&
+                    parse(s.substr(j), false, c).kind == 1)
+                    return s.substr(j);
+            }
+        }
+        return last;
     }
 
     bool is_lrm(const std::string &s, Ctx &c) const {
@@ -332,7 +381,7 @@ class Model {
     }
 
     Regex strict, basic, rel_index, source_name, reported_name, split_name,
-        index_token, name_parts, index_group, item, integer, charlit, last_comp;
+        index_token, name_parts, index_group, item, integer, charlit, xid;
 };
 
 }  // namespace ref

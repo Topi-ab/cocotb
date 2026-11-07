@@ -240,8 +240,9 @@ int main(int argc, char **argv) {
             ++n;
         }
         std::printf(
-            "RESULT OK (corpus: %ld names, %ld LRM names, 0 failures)\n", n, l);
-        return 0;
+            "RESULT %s (corpus: %ld names, %ld LRM names, %ld failures)\n",
+            g_failures ? "FAILED" : "OK", n, l, static_cast<long>(g_failures));
+        return g_failures ? 1 : 0;
     }
     if (std::string(argv[2]) == "random") {
         // A fixed number of random strings of one length over an alphabet:

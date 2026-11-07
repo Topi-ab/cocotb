@@ -1,7 +1,7 @@
 # Names checked first (test_vhdl_names.py: test_corpus). One per line: the bytes
 # in hex ('-' for the empty name), then why the name is here: failures found by
 # the longer runs (which take far longer to find them again), edge cases, and
-# examples from independent readings of the class. Add new failures here.
+# examples from reviews of the class. Add new failures here.
 5c282e012e01295c5c285c5c295c2829 found by the random run
 5ce4275c5c282d41305c5c5f5c286129 found by the random run
 5c205c5c282d2d5c5c2941012c5c2829 found by the random run
@@ -61,21 +61,38 @@ c4 edge case
 5c4261636b5c536c6173685c edge case
 5c4261636b5c5c536c6173685c edge case
 5c415c285c415c2829 edge case
-5c615c5c625c785c example of an independent reading
-615c5c625c78 example of an independent reading
-5c61625c5c example of an independent reading
-5c61625c5c5c example of an independent reading
-5c615c5c5c5c625c example of an independent reading
-616263282029 example of an independent reading
-662827002729 example of an independent reading
-6162632878207929 example of an independent reading
-5c61005c example of an independent reading
-5c6120625c28202029 example of an independent reading
-66285c615c5c29 example of an independent reading
-616263 example of an independent reading
-414243 example of an independent reading
-5c6162 example of an independent reading
-5c4142 example of an independent reading
-283129 example of an independent reading
-6628312978283229 example of an independent reading
-612878207929 example of an independent reading
+5c615c5c625c785c example from a review
+615c5c625c78 example from a review
+5c61625c5c example from a review
+5c61625c5c5c example from a review
+5c615c5c5c5c625c example from a review
+616263282029 example from a review
+662827002729 example from a review
+6162632878207929 example from a review
+5c61005c example from a review
+5c6120625c28202029 example from a review
+66285c615c5c29 example from a review
+616263 example from a review
+414243 example from a review
+5c6162 example from a review
+5c4142 example from a review
+283129 example from a review
+6628312978283229 example from a review
+612878207929 example from a review
+5c426c6b5c2e5c5369675c found by a review (dotted path, index-only name, path key)
+5c47656e5c2830292e5c5369675c found by a review (dotted path, index-only name, path key)
+755f7375622e5c666f6f5c found by a review (dotted path, index-only name, path key)
+755f7375622e5c464f4f5c found by a review (dotted path, index-only name, path key)
+2827612729 found by a review (dotted path, index-only name, path key)
+2827412729 found by a review (dotted path, index-only name, path key)
+285c5265645c29 found by a review (dotted path, index-only name, path key)
+5c615c2e625c found by a review (dotted path, index-only name, path key)
+746f702e617272285c612e625c29 found by a review (dotted path, index-only name, path key)
+746f702e617272285c412e425c29 found by a review (dotted path, index-only name, path key)
+782e5c655c28272e2729 found by a review (dotted path, index-only name, path key)
+5c705c5c715c found by a review (dotted path, index-only name, path key)
+5c705c5c5c5c715c found by a review (dotted path, index-only name, path key)
+746f702e675b2761275d found by a review (dotted path, index-only name, path key)
+746f702e675b2741275d found by a review (dotted path, index-only name, path key)
+746f702e675b5c615c5d found by a review (dotted path, index-only name, path key)
+746f702e675b5c415c5d found by a review (dotted path, index-only name, path key)
